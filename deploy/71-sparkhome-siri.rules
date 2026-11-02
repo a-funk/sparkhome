@@ -1,0 +1,3 @@
+# SparkHome: let the logged-in user open the gen-1 Siri Remote's hidraw node (BlueZ hog, HID 0005:004C:026D), which is
+# root-only otherwise. Installed by 'deploy/install.sh root'; 'deploy/install.sh root undo' removes it.
+SUBSYSTEM=="hidraw", KERNELS=="0005:004C:026D.*", TAG+="uaccess"

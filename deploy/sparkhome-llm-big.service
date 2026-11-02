@@ -1,0 +1,57 @@
+# SparkHome's bigger local model: vLLM Nemotron 3.5 Lightning 30B-A3B NVFP4 as an OpenAI-compatible server on
+# 127.0.0.1:8001 only (llm.api "openai", model "nemotron-3.5-lightning").
+# This is the model card's DGX Spark recipe (also the model card's example: port 8000, 0.80 of memory,
+# 262K context), cut down to share the GB10 with games. It uses a 16K context and 8 sequences; the KV pool is fixed at
+# 4 GiB (otherwise vLLM fills the whole 0.30 share); it takes about 25 GiB resident, and thinking is off unless a request
+# sends chat_template_kwargs {"enable_thinking": true}. It is not enabled at boot. Measurements: docs/RESEARCH.md §7.3.
+#   install: cp deploy/sparkhome-llm-big.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   start:   systemctl --user start sparkhome-llm-big    (ready in 4-6 min, when curl -s 127.0.0.1:8001/health answers)
+#   stop:    systemctl --user stop sparkhome-llm-big     (frees the memory; the container is --rm)
+#   undo:    stop, rm ~/.config/systemd/user/sparkhome-llm-big.service, daemon-reload, docker volume rm sparkhome-llm-big-cache
+[Unit]
+Description=SparkHome big LLM (vLLM Nemotron 3.5 Lightning NVFP4, 127.0.0.1:8001)
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+ExecStartPre=-/usr/bin/docker rm -f sparkhome-llm-big
+# The named volume keeps the torch.compile/FlashInfer/Triton caches between starts; the HF cache is read-only and offline.
+# No speculative decoding on purpose: the recipe's DSpark drafter breaks prefix caching here. With it, a hit needs 8,480
+# shared tokens (4,240-token hybrid Mamba blocks, and DSpark drops the last matched block), and --prefix-match-unit
+# kills the engine (its sliding-window drafter). Without it, later agent rounds reuse ~92% of their prompt: per-round
+# p50 -22%, per-request p50 -10%, same accuracy (264-case A/B, docs/RESEARCH.md §7.3). The DSpark flags, if you want
+# its faster decode back: --speculative_config.method dspark --speculative_config.num_speculative_tokens 3
+# --speculative_config.model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark (then drop --prefix-match-unit).
+ExecStart=/usr/bin/docker run --rm --name sparkhome-llm-big --gpus all --shm-size 8g \
+    -p 127.0.0.1:8001:8000 \
+    -e HF_HUB_OFFLINE=1 -e VLLM_NO_USAGE_STATS=1 -e DO_NOT_TRACK=1 \
+    -v sparkhome-llm-big-cache:/root/.cache \
+    -v %h/.cache/huggingface:/root/.cache/huggingface:ro \
+    vllm/vllm-openai:v0.27.1 \
+    --model nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4 \
+    --served-model-name nemotron-3.5-lightning \
+    --host 0.0.0.0 --port 8000 \
+    --gpu-memory-utilization 0.30 \
+    --kv-cache-memory-bytes 4G \
+    --max-model-len 16384 \
+    --max-num-seqs 8 \
+    --max-num-batched-tokens 4096 \
+    --moe-backend marlin \
+    --kv-cache-dtype fp8 \
+    --enable-prefix-caching \
+    --prefix-match-unit 16 \
+    --mamba-backend flashinfer \
+    --mamba-cache-mode align \
+    --reasoning-parser nemotron_v3 \
+    --tool-call-parser qwen3_coder \
+    --enable-auto-tool-choice \
+    --default-chat-template-kwargs '{"enable_thinking": false}' \
+    --enable-prompt-tokens-details \
+    --disable-uvicorn-access-log
+ExecStop=/usr/bin/docker stop -t 20 sparkhome-llm-big
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=40
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,33 @@
+# SparkHome's Shark robot vacuum connector (settings.mcp_servers "shark"): sharkclean-mcp's shark-mcp-http on
+# 127.0.0.1:8765 only, gated by the bearer secret in ~/.config/shark-mcp/bearer (mode 600, SparkHome reads the same
+# file). The SharkNinja login lives in ~/.config/shark-mcp/tokens.json (mode 600; the server rotates it in place).
+# Steps and the sign-in: README, "Connectors".
+#   install: rsync the sharkclean-mcp checkout to ~/sharkclean-mcp (never its .env), then
+#            cd ~/sharkclean-mcp && ~/.local/bin/uv sync --frozen --no-dev
+#            install -d -m 700 ~/.config/shark-mcp
+#            (umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > ~/.config/shark-mcp/bearer)
+#            cp deploy/sparkhome-shark.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   start:   systemctl --user start sparkhome-shark      (enable it too to start it at boot)
+#   check:   curl -s 127.0.0.1:8765/healthz; python3 -m sparkhome.connectors "where's robbie"
+#   undo:    systemctl --user disable --now sparkhome-shark; rm ~/.config/systemd/user/sparkhome-shark.service;
+#            systemctl --user daemon-reload; rm -r ~/sharkclean-mcp ~/.config/shark-mcp
+[Unit]
+Description=SparkHome connector: Shark robot vacuum MCP server (127.0.0.1:8765)
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Environment=HOST=127.0.0.1 PORT=8765 SHARK_MCP_TOKEN_CACHE=%h/.config/shark-mcp/tokens.json PYTHONUNBUFFERED=1
+# Host-header check (DNS rebinding) on as well as the bearer secret: the kiosk Chrome shares this loopback
+Environment=MCP_ALLOWED_HOSTS=127.0.0.1:8765,localhost:8765
+# the secret is read from its file at start; it is never written into this unit. UMask: the token cache the server
+# writes (and rotates) is created 600 from the start, not chmod-ed after the write
+ExecStart=/bin/sh -c 'MCP_BEARER_TOKEN=$$(cat %h/.config/shark-mcp/bearer) \
+    exec %h/sharkclean-mcp/.venv/bin/shark-mcp-http'
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

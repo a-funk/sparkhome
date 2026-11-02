@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>SparkHome</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<div id="stage" class="ondock">
+  <div id="wall"></div>
+  <div id="shelf"></div>
+  <main id="page" aria-label="Home"></main>
+  <div id="fade"></div>
+  <div id="chips">
+    <span class="chip" id="chip-off" hidden><i></i>Reconnecting…</span>
+    <span class="chip" id="chip-model" hidden><i></i><span></span></span>
+    <span class="chip" id="chip-gpu" hidden></span>
+    <span class="chip" id="chip-clock"></span>
+  </div>
+  <div id="launch" hidden></div>
+  <div id="switcher" role="dialog" aria-modal="true" aria-label="Open apps">
+    <div id="swrow" role="listbox" aria-label="Open apps"></div>
+    <div id="swhint"><span>Swipe up to quit · </span>OK to open · Back to return</div>
+    <div id="swsheet" role="alertdialog" aria-modal="true" aria-labelledby="swst" aria-describedby="swsb">
+      <h2 id="swst"></h2><p id="swsb"></p>
+      <div class="btns"><span class="pill" data-b="0">Cancel</span><span class="pill force" data-b="1">Force Quit</span></div>
+    </div>
+    <div id="swlive" aria-live="polite"></div>
+  </div>
+  <svg id="vcur" hidden viewBox="0 0 24 24" width="44" height="44"><path d="M5 2.5v17.2l4.6-4.4 3.2 6.9 3-1.4-3.2-6.8h6.3z" fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="veil"></div>
+  <div id="edge"></div>
+  <div id="voice" data-phase="idle" aria-live="polite">
+    <div class="orb"><i></i><i></i><b></b></div>
+    <div class="vtext"><div id="vphase"></div><div id="vtrans"></div><div id="vreply"></div></div>
+  </div>
+  <div id="settings" role="dialog" aria-modal="true" aria-label="Settings">
+    <h1>Settings</h1>
+    <div id="setlist" role="listbox" aria-label="Sections"></div>
+    <div id="setpane"><h2 id="sethead"></h2><div id="setview"><div id="setbody"><div id="setrows" role="listbox"></div><div id="setfoot"></div></div></div></div>
+    <div id="setsheet" role="alertdialog" aria-modal="true" aria-labelledby="setst" aria-describedby="setsb">
+      <h2 id="setst"></h2><p id="setsb"></p>
+      <div class="btns"><span class="pill" data-b="0"></span><span class="pill" data-b="1"></span></div>
+    </div>
+    <div id="pattern" hidden></div>
+    <div id="setbye" hidden></div>
+    <div id="setlive" aria-live="polite"></div>
+  </div>
+  <form id="cmd" autocomplete="off"><input id="cmdin" placeholder="Ask SparkHome… “open Cyberpunk”, “search Twitch for speedruns”" enterkeyhint="send" spellcheck="false"></form>
+  <div id="lock" hidden><div>This browser isn’t paired.</div><div>Open <a href="/remote">/remote</a> here and enter the PIN from the TV’s Settings › Network.</div></div>
+  <div id="sleep"></div>
+  <div id="sleepmsg"><b>Going to sleep in <span id="sleepn">10</span></b><span>Press any button to stay awake</span></div>
+</div>
+<script src="/ui/app.js"></script>
+</body>
+</html>

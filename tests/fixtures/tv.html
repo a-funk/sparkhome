@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- A desktop-shaped streaming page for tests/skin_check.py: a header with a search box, rows of three kinds of tile
+     (links, role=button cards, cards clickable only by JS), a row the page re-renders, a modal, a native <dialog>, a
+     cookie banner, hover previews and a footer; Play opens a player over the page. ?player shows a full-size playing
+     video instead, ?fields text fields of every kind. -->
+<meta charset="utf-8">
+<title>Fixture TV</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; background: #141414; color: #eee; }
+  header { display: flex; gap: 24px; align-items: center; padding: 16px 40px; }
+  header a { color: #eee; }
+  .hero { height: 300px; padding: 40px; background: #333; }
+  h2 { margin: 24px 40px 8px; }
+  .row { display: flex; gap: 12px; overflow-x: auto; padding: 8px 40px; scrollbar-width: none; }
+  .tile { flex: 0 0 200px; height: 112px; background: #2a5; color: #fff; position: relative; display: block; }
+  .tile img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .preview { display: none; position: absolute; top: 0; left: 0; width: 300px; height: 200px; background: #a33; z-index: 5; }
+  .tile:hover .preview { display: block; }
+  #onetrust-consent-sdk { position: fixed; bottom: 0; left: 0; right: 0; padding: 20px; background: #fff; color: #000; }
+  [role=dialog] { position: fixed; inset: 100px 300px; background: #222; padding: 30px; }
+  footer { padding: 40px; }
+  video { width: 100vw; height: 100vh; display: block; }
+  .overlay { position: fixed; inset: 0; background: #000; }
+</style>
+<header>
+  <a id="home" href="#home">Home</a><a id="movies" href="#movies">Movies</a><a id="series" href="#series">Series</a>
+  <input id="q" type="search" placeholder="Search">
+</header>
+<div class="hero"><button id="play">Play</button> <button id="info">More info</button></div>
+<h2>Trending</h2>
+<div class="row" id="r1"></div>
+<h2>Originals</h2>
+<div class="row" id="r2"></div>
+<h2>Clickable by script only</h2>
+<div class="row" id="r3"></div>
+<h2>Live (re-rendered)</h2>
+<div class="row" id="r4"></div>
+<div role="dialog" aria-modal="true" id="modal" hidden>
+  <h3>Episodes</h3><button id="ep1">Episode 1</button> <button id="ep2">Episode 2</button> <button id="close">Close</button>
+</div>
+<dialog id="dlg"><button id="d1">Profile 1</button> <button id="d2">Profile 2</button></dialog>
+<div id="onetrust-consent-sdk">We use cookies. <button id="accept">Accept all</button></div>
+<footer><a href="#help">Help Center</a> <a href="#terms">Terms of Use</a></footer>
+<pre id="log"></pre>
+<script>
+  const log = s => { document.getElementById('log').textContent += s + '\n'; };
+  const T = ['Stranger Things', 'The Crown', 'Wednesday', 'Dark', 'Ozark', 'Narcos', '1923', 'Bridgerton',
+             'The Witcher', 'Squid Game', 'Money Heist', 'Black Mirror'];
+  const svg = c => 'data:image/svg+xml,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg"><rect width="100%" height="100%" fill="${c}"/></svg>`);
+  document.getElementById('r1').innerHTML = T.map((t, i) =>
+    `<a class="tile" id="t${i}" href="#title-${i}"><img alt="${t}" src="${svg('#2a5')}"><span class="preview"></span></a>`).join('');
+  document.getElementById('r2').innerHTML = T.map((t, i) =>
+    `<div class="tile" role="button" tabindex="0" id="o${i}" aria-label="Original ${t}"><img alt="" src="${svg('#25a')}"></div>`).join('');
+  document.getElementById('r3').innerHTML = T.slice(0, 6).map((t, i) => `<div class="tile card" id="c${i}">${t} Live</div>`).join('');
+  document.querySelectorAll('#r2 [role=button], #r3 .card').forEach(e => e.addEventListener('click', () => log('click ' + e.id)));
+  let renders = 0;
+  window.rerender = () => {           // what a SPA does: new elements with the same labels
+    renders++;
+    document.getElementById('r4').innerHTML = ['News', 'Sports', 'Weather', 'Music', 'Kids', 'Docs'].map((t, i) =>
+      `<a class="tile" id="l${i}-${renders}" href="#live-${i}" aria-label="Live ${t}"></a>`).join('');
+  };
+  rerender();
+  document.getElementById('info').onclick = () => { document.getElementById('modal').hidden = false; document.getElementById('ep1').focus(); };
+  document.getElementById('close').onclick = () => { document.getElementById('modal').hidden = true; };
+  addEventListener('hashchange', () => log('hash ' + location.hash));
+  addEventListener('keydown', e => log('page key ' + e.key));
+  const video = () => {               // a playing full-size video (of a canvas)
+    const c = Object.assign(document.createElement('canvas'), {width: 64, height: 36}), v = document.createElement('video');
+    setInterval(() => c.getContext('2d').fillRect(0, 0, Math.random() * 64, 36), 50);
+    v.muted = true;
+    v.srcObject = c.captureStream(10);
+    v.play();
+    return v;
+  };
+  document.getElementById('play').onclick = () =>   // a player over the page, which stays under it (taller than the screen)
+    document.body.appendChild(Object.assign(document.createElement('div'), {className: 'overlay'})).append(video());
+  if (location.search === '?player') {  // a playing full-size video: the player's own arrows (seek) must reach it
+    document.body.innerHTML = '<button id="pp" style="position: fixed; bottom: 20px; left: 20px">Pause</button><pre id="log"></pre>';
+    document.body.prepend(video());
+  }
+  if (location.search === '?fields') {  // fields that keep their arrows: one-line ones (typed or not), a textarea, rich
+    // text, one with its suggestion list open, and one inside a web component
+    document.body.innerHTML = '<input id="f1" type="text" value="hello"> <input id="f2" value="hello"> '
+      + '<textarea id="f3">hello\nhello</textarea> <div id="f4" contenteditable>hello</div> '
+      + '<input id="f5" role="combobox" aria-expanded="true" value="hello"> <div id="f6"></div><pre id="log"></pre>';
+    document.getElementById('f6').attachShadow({mode: 'open'}).innerHTML = '<input type="search" value="hello">';
+  }
+</script>

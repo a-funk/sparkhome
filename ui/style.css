@@ -1,0 +1,571 @@
+/* SparkHome launcher: tvOS Home Screen look on a fixed 1920x1080 stage, scaled to the window.
+   Numbers come from research/ui-session.md Part A (HIG grid + labelled estimates); calibrate against a real capture.
+   60 fps rule: only transform/opacity animate; shadows/blur are pre-rendered and fade by opacity. */
+:root {
+  --safe-x: 80px; --safe-y: 60px; --gap: 40px;
+  --focus: 1.2; --t-in: 160ms; --t-out: 280ms; --t-fast: 90ms; --ease: cubic-bezier(.2, .8, .2, 1);
+  --bg: #07080b; --label-2: rgba(235, 235, 245, .62); --label-3: rgba(235, 235, 245, .36);
+  --green: rgb(48, 209, 88); --spark: #76b900;
+  --glass: rgba(22, 22, 26, .35); --blur: blur(36px) saturate(170%);
+  --font: "SF Pro Display", "SF Pro Text", Inter, "Ubuntu Sans", Ubuntu, Cantarell, system-ui, sans-serif;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+body { font: 500 29px/36px var(--font); letter-spacing: .014em; color: #fff; -webkit-font-smoothing: antialiased;
+  user-select: none; cursor: none; }
+body.mouse { cursor: default; }
+#stage { position: absolute; left: 50%; top: 50%; width: 1920px; height: 1080px; margin: -540px 0 0 -960px;
+  transform: scale(var(--k, 1)); overflow: hidden; background: var(--bg); contain: strict; }
+
+/* ---------- wallpaper (behind lower rows; under a dim, the app switcher's backdrop; lit, its Home card) ---------- */
+:root { --wall: radial-gradient(70% 55% at 10% 6%, rgba(64, 86, 170, .20), transparent 70%),
+  radial-gradient(55% 50% at 96% 98%, rgba(118, 185, 0, .09), transparent 70%),
+  radial-gradient(45% 40% at 66% 46%, rgba(130, 70, 170, .08), transparent 70%), var(--bg); }
+#wall { position: absolute; inset: 0; background: var(--wall); }
+
+/* ---------- Top Shelf ---------- */
+#shelf { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transition: transform .6s var(--ease), opacity .18s; }
+.pane { position: absolute; inset: 0; overflow: hidden; opacity: 0; transition: opacity .7s ease; --c: #3a3a3c; }
+.pane.on { opacity: 1; }
+.pane .art { position: absolute; inset: 0; background: #000; transform-origin: 66% 30%; }
+.pane .hero, .pane .flip { position: absolute; left: -192px; width: 2304px; height: 744px; object-fit: cover; }
+.pane .hero { top: 0; -webkit-mask-image: linear-gradient(#000 70%, transparent 100%); mask-image: linear-gradient(#000 70%, transparent 100%); }
+/* tvOS fills 16:9 by flipping and blurring a short shelf image (HIG Top Shelf); same trick here */
+.pane .flip { top: 630px; transform: scaleY(-1); filter: blur(34px) brightness(.62) saturate(1.25); }
+.pane .art.brand, .pane .art.wbg { background:
+  radial-gradient(52% 72% at 80% 26%, color-mix(in oklab, var(--c) 78%, transparent), transparent 70%),
+  radial-gradient(40% 55% at 4% 96%, color-mix(in oklab, var(--c) 42%, transparent), transparent 72%),
+  radial-gradient(30% 40% at 58% 8%, color-mix(in oklab, var(--c) 30%, transparent), transparent 70%),
+  linear-gradient(172deg, color-mix(in oklab, var(--c) 32%, #050506) 0%, #050506 72%); }
+.away .pane.on .art { animation: kenburns 32s ease-in-out infinite alternate; }
+@keyframes kenburns { to { transform: scale(1.08) translate(-1.2%, .8%); } }
+.pane .scrim { position: absolute; inset: 0; pointer-events: none; transition: opacity .9s ease; background:
+  linear-gradient(180deg, rgba(7, 8, 11, .28) 0%, rgba(7, 8, 11, 0) 16%, rgba(7, 8, 11, 0) 40%, rgba(7, 8, 11, .62) 63%,
+  rgba(7, 8, 11, .93) 86%, var(--bg) 100%); }
+.away .pane .scrim { opacity: .38; }
+/* static grain: breaks up 8-bit banding of big soft gradients on the TV */
+.pane .art.brand::after, .pane .art.wbg::after { content: ""; position: absolute; inset: 0; opacity: .07; background-image:
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+.pane .mark { position: absolute; right: -60px; top: 40px; font-size: 380px; line-height: 1; font-weight: 800; letter-spacing: -.04em;
+  white-space: nowrap; color: var(--wm, #fff); opacity: .07; transform: rotate(-6deg); transform-origin: right top; }
+.info { position: absolute; left: var(--safe-x); bottom: 410px; width: 1100px; transition: transform .9s var(--ease), opacity .3s ease; }
+.info::before { content: ""; position: absolute; z-index: -1; left: -420px; top: -260px; right: -120px; bottom: -220px;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, .5), transparent); pointer-events: none; }
+.away .info { transform: translateY(300px); }
+#stage:not(.ondock) .info { opacity: 0; }
+.info .logo { display: block; width: 600px; height: 338px; object-fit: contain; object-position: left bottom;
+  margin: 0 0 -46px -34px; filter: drop-shadow(0 6px 26px rgba(0, 0, 0, .55)); }
+/* ponytail: no line limit; a logo-less Dock title over ~35 characters runs to 4 lines and tops the safe area. Size it by
+   length like wm() does for tiles if one lands on the Dock (a line clamp's overflow:hidden cuts descenders at this line-height) */
+.info .wm { margin: 0; text-align: left; font-size: 124px; line-height: 1.04; font-weight: 800; letter-spacing: -.022em; color: var(--wm, #fff);
+  text-shadow: 0 6px 40px rgba(0, 0, 0, .35); }
+.info .sub { margin: 16px 0 0; font-size: 38px; line-height: 46px; font-weight: 500; letter-spacing: .01em; color: rgba(255, 255, 255, .78); }
+.info .acts { display: flex; gap: 16px; align-items: center; margin-top: 28px; }
+.hint, .badge { display: inline-flex; align-items: center; gap: 12px; height: 52px; padding: 0 26px; border-radius: 26px;
+  font-size: 25px; font-weight: 600; letter-spacing: .02em; white-space: nowrap; }
+.hint { background: rgba(255, 255, 255, .92); color: #111; }
+.hint svg { width: 18px; height: 22px; }
+.badge { background: rgba(255, 255, 255, .13); color: rgba(255, 255, 255, .92);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), inset 0 0 0 1px rgba(255, 255, 255, .06); }
+.badge.run, .hint .re, .running .hint .go, .tab .hint .go { display: none; }
+.running .badge.run, .running .hint .re, .tab .hint .re { display: inline-flex; }
+.badge.run::before, .run::before { content: ""; width: 12px; height: 12px; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 10px var(--green); }
+
+/* ---------- rows ---------- */
+#page { position: absolute; left: 0; top: 0; width: 1920px; transform-origin: 960px 540px;
+  transition: transform .55s var(--ease), opacity .18s; }
+.away #page { transition-duration: .9s; }
+.row { position: absolute; left: 0; width: 1920px; transition: opacity .35s ease; }
+.row.gone { opacity: 0; }
+.row h2 { position: absolute; left: var(--safe-x); top: 0; margin: 0; font-size: 34px; line-height: 44px; font-weight: 600;
+  letter-spacing: .01em; color: rgba(255, 255, 255, .8); transition: opacity .3s; }
+.ondock .row.peek h2 { opacity: 0; }
+.strip { position: absolute; left: var(--safe-x); display: flex; gap: var(--gap); transition: transform .45s var(--ease); }
+.fast .strip, .fast #page, .fast #shelf { transition-duration: .2s; }
+
+/* ---------- tiles: .tile > .lift(scale) > .shadow + .tilt(sway/pointer) > .face > layers ---------- */
+.tile { position: relative; flex: none; width: var(--tw); height: var(--th); --r: 14px; }
+.tile.icons { --tw: 260px; --th: 156px; }
+.tile.posters { --tw: 260px; --th: 390px; --r: 16px; }
+.tile.widgets { --tw: 410px; --th: 246px; --r: 30px; }
+.tile.focused { z-index: 2; }
+.lift { position: absolute; inset: 0; transition: transform var(--t-out) var(--ease); }
+/* no will-change anywhere: on the tile it froze the raster at 1.0x before the 1.2x focus (edge sharpness p99 83 vs 135),
+   and on strips/page/shelf it measured no gain. The sway starts after focus-in settles so it rasters at 1.2x. */
+.focused .lift { transform: scale(var(--focus)); transition-duration: var(--t-in); }
+.idle .focused .lift { transform: scale(calc(var(--focus) + .05)); transition-duration: 1.4s; }
+.fast .lift, .fast .tilt, .fast .layer, .fast .spec, .fast .shadow { transition-duration: var(--t-fast); }
+.shadow { position: absolute; left: 5%; right: 5%; top: 10%; bottom: 0; border-radius: var(--r);
+  box-shadow: 0 34px 56px -8px rgba(0, 0, 0, .7), 0 12px 24px rgba(0, 0, 0, .35); opacity: 0;
+  transition: opacity var(--t-out) var(--ease); }
+.focused .shadow { opacity: 1; transition-duration: var(--t-in); }
+.tilt { position: absolute; inset: 0; transition: transform var(--t-out) var(--ease); }
+.focused .tilt { transform: perspective(900px) rotateY(1.5deg); transition-duration: var(--t-in);
+  animation: sway 5s ease-in-out .9s infinite; }
+@keyframes sway {
+  0%, 100% { transform: perspective(900px) rotateX(0deg) rotateY(1.5deg); }
+  25% { transform: perspective(900px) rotateX(1.5deg) rotateY(0deg); }
+  50% { transform: perspective(900px) rotateX(0deg) rotateY(-1.5deg); }
+  75% { transform: perspective(900px) rotateX(-1.5deg) rotateY(0deg); } }
+.face { position: absolute; inset: 0; border-radius: var(--r); overflow: hidden; background: #1c1c20;
+  box-shadow: 0 6px 14px rgba(0, 0, 0, .32); }
+/* tvOS 26 icon edge: a thin lit rim (static, never animated) */
+.face::after { content: ""; position: absolute; inset: 0; z-index: 5; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .13), inset 0 1.5px 0 rgba(255, 255, 255, .3); }
+.layer { position: absolute; inset: 0; transition: translate var(--t-out) var(--ease); }
+.layer img { display: block; width: 100%; height: 100%; object-fit: cover; }
+/* 6 % taller than the face, so its bottom edge is cropped: some heroes end in a dark band (Cyberpunk 2077's last 30 of
+   620 rows) that showed as a ragged strip along the tile's bottom */
+.layer img.hero { height: 106%; object-position: 58% 35%; }
+/* one cell, the padding box's inside: a logo (height 100%) shrinks into it. Sized by its own height (an auto row), a
+   logo under a switcher card's state pill ran 36 px past the face, its bottom cut off */
+.l1 { display: grid; grid-template-rows: minmax(0, 1fr); place-items: center; padding: 6% 7%; }
+.l1 img { object-fit: contain; filter: drop-shadow(0 3px 10px rgba(0, 0, 0, .45)); }
+.l0 { --d: -.5; } .l1 { --d: 1; }
+/* layer parallax: 2 px per depth step, in step with the sway */
+.focused .layer { translate: calc(var(--d) * 2px) 0; transition-duration: var(--t-in); animation: shift 5s ease-in-out .9s infinite; }
+@keyframes shift {
+  0%, 100% { translate: calc(var(--d) * 2px) 0; } 25% { translate: 0 calc(var(--d) * -2px); }
+  50% { translate: calc(var(--d) * -2px) 0; } 75% { translate: 0 calc(var(--d) * 2px); } }
+.spec { position: absolute; left: -60%; top: -60%; width: 220%; height: 220%; z-index: 4; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, .35), rgba(255, 255, 255, .1) 42%, rgba(255, 255, 255, 0) 72%);
+  opacity: 0; transform: translate(12%, -24%); transition: opacity var(--t-out) var(--ease); }
+.focused .spec { opacity: 1; transition-duration: var(--t-in); animation: glint 5s ease-in-out .9s infinite; }
+@keyframes glint {
+  0%, 100% { transform: translate(12%, -24%); } 25% { transform: translate(2%, -32%); }
+  50% { transform: translate(-10%, -24%); } 75% { transform: translate(2%, -16%); } }
+/* pointer drives tilt/shift/shine instead of the idle sway */
+.ptr .tilt { animation: none; transition: transform .2s cubic-bezier(.25,.8,.25,1);   /* remote tilt arrives at 20 Hz: ease between */
+  transform: perspective(900px) rotateX(calc(var(--py, 0) * -3deg)) rotateY(calc(var(--px, 0) * 3deg)); }
+.ptr .layer { animation: none; translate: calc(var(--px, 0) * var(--d) * 2px) calc(var(--py, 0) * var(--d) * 2px); }
+.ptr .spec { animation: none; transform: translate(calc(var(--px, 0) * 18%), calc(var(--py, 0) * 18% - 20%)); }
+.shade { position: absolute; inset: 0; z-index: 6; background: #000; opacity: 0; pointer-events: none; transition: opacity 1.2s ease; }
+.idle .tile:not(.focused) .shade { opacity: .4; }
+.face .run { position: absolute; z-index: 7; top: 10px; right: 10px; display: none; align-items: center; gap: 8px; height: 38px;
+  padding: 0 14px; border-radius: 19px; background: rgba(0, 0, 0, .55); font-size: 23px; font-weight: 700; letter-spacing: .01em; }
+.running .face .run { display: inline-flex; }
+.icons .face .run { width: 38px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
+/* "Optimized for Spark" (a GameSpark launch profile): top left, the Running pill's mirror; a chip with its mark alone
+   where both wouldn't fit (icons, a running poster) */
+.face .opt { position: absolute; z-index: 7; top: 10px; left: 10px; display: inline-flex; align-items: center; gap: 7px;
+  height: 38px; padding: 0 13px; border-radius: 19px; background: rgba(0, 0, 0, .55); font-size: 18px; font-weight: 700;
+  letter-spacing: .01em; white-space: nowrap; }
+.icons .face .opt, .running .face .opt { width: 38px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
+.opt::before { content: ""; flex: none; width: 11px; height: 11px; background: var(--spark); transform: rotate(45deg); }
+/* at most the focused tile's width plus both gaps: an edge column's long title ends in an ellipsis, not off the stage */
+.label { position: absolute; left: 50%; top: calc(100% + var(--th) * .1 + 14px); transform: translateX(-50%);
+  max-width: calc(var(--tw) * var(--focus) + 2 * var(--gap));
+  display: flex; flex-direction: column; align-items: center; gap: 8px; white-space: nowrap; pointer-events: none;
+  opacity: 0; transition: opacity .12s; }
+.focused .label { opacity: 1; transition: opacity var(--t-in) .06s; }
+.label b, .label .note { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.label b { font-size: 29px; line-height: 36px; font-weight: 500; text-shadow: 0 2px 12px rgba(0, 0, 0, .6); }
+.label .note { font-size: 23px; line-height: 30px; letter-spacing: -.004em; color: var(--label-2); padding: 1px 14px;
+  border-radius: 16px; background: rgba(255, 255, 255, .09); }
+.dock .label .note { display: none; }
+.label .rn { display: none; color: var(--green); }
+.running .label .rn { display: inline; }
+.posters .label .rn { display: none; }   /* the poster face shows the Running pill; the title keeps its room */
+
+/* ---------- brand faces: brand colour + wordmark text (no bundled logos) ---------- */
+.brand { background: linear-gradient(150deg, color-mix(in oklab, var(--c) 72%, #fff) -25%, var(--c) 42%,
+  color-mix(in oklab, var(--c) 60%, #000) 100%); }
+.fg .wm { color: #fff; }
+.wm { font-size: var(--fs, 44px); line-height: 1.02; font-weight: 800; letter-spacing: -.015em; text-align: center;
+  text-wrap: balance; }
+.light .fg .wm { color: #111; }
+.posters .l1 { place-items: end start; padding: 0 24px 30px; }
+.posters .wm { text-align: left; }
+.posters .bsub { display: block; margin-top: 8px; font-size: 23px; line-height: 28px; font-weight: 600; opacity: .7; }
+.posters .brand { background: radial-gradient(120% 70% at 85% 0%, color-mix(in oklab, var(--c) 70%, #fff) 0%, transparent 60%),
+  linear-gradient(180deg, var(--c) 0%, color-mix(in oklab, var(--c) 45%, #000) 100%); }
+/* variants picked in app.js: ink = brand-coloured wordmark on black, paper = on white (only when the colour reads) */
+.ink, .paper { --wm: var(--c); }
+.ink .brand { background: radial-gradient(130% 120% at 22% -10%, #303036 0%, #121215 58%, #0b0b0d 100%); }
+.paper .brand { background: linear-gradient(180deg, #fff, #e6e6eb); }
+.ink .fg .wm, .paper .fg .wm { color: var(--c); }
+/* typographic flavours keyed by tile id (unknown ids get the generic wordmark) */
+[data-id=netflix] :is(.wm, .mark) { text-transform: uppercase; font-weight: 900; letter-spacing: .01em; }
+:is([data-id=hulu], [data-id=plex], [data-id=peacock], [data-id=prime], [data-id=crunchyroll]) :is(.wm, .mark) { text-transform: lowercase; }
+[data-id=bigpicture] :is(.wm, .mark) { text-transform: uppercase; letter-spacing: .04em; }
+
+/* ---------- widgets (glass cards with live readouts) ---------- */
+.wface { position: absolute; inset: 0; padding: 26px 30px; display: flex; flex-direction: column;
+  background: linear-gradient(160deg, rgba(255, 255, 255, .15), rgba(255, 255, 255, .045) 70%); }
+.wt { font-size: 23px; line-height: 30px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--label-2); }
+.wface b { font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.wface small { font-size: .5em; font-weight: 600; color: var(--label-2); letter-spacing: 0; }
+.gpu { flex-direction: row; align-items: center; gap: 30px; }
+.ring { position: relative; flex: none; width: 176px; height: 176px; }
+.ring svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.ring circle { fill: none; stroke-width: 10; }
+.ring .trk { stroke: rgba(255, 255, 255, .12); }
+.ring .val { stroke: var(--c); stroke-linecap: round; transition: stroke-dasharray .9s var(--ease); }
+.ring .rv { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; font-size: 52px; line-height: 1; }
+.ring .rv > small { display: block; margin-top: 4px; font-size: 23px; text-transform: uppercase; letter-spacing: .06em; }
+.ring .rv b small { font-size: .45em; margin-left: 2px; }
+.wcol { display: flex; flex-direction: column; gap: 6px; }
+.wcol .num { font-size: 44px; line-height: 52px; }
+.big { margin-top: auto; font-size: 76px; line-height: 80px; }
+.bar { height: 10px; margin: 16px 0 12px; border-radius: 5px; background: rgba(255, 255, 255, .12); overflow: hidden; }
+.bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, color-mix(in oklab, var(--c) 55%, #fff), var(--c));
+  transform-origin: left; transform: scaleX(0); transition: transform .9s var(--ease); }
+.wsub { font-size: 23px; line-height: 30px; color: var(--label-2); }
+.wsub b { color: #fff; font-weight: 600; }
+.models ul { list-style: none; margin: auto 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.models li { display: flex; align-items: center; gap: 12px; font-size: 27px; line-height: 34px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.models li::before { content: ""; flex: none; width: 12px; height: 12px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+.models li.none { color: var(--label-2); font-weight: 500; }
+.models li.none::before { background: rgba(255, 255, 255, .25); box-shadow: none; }
+.settings .gear { width: 84px; height: 84px; margin: auto 0 12px; color: rgba(255, 255, 255, .92); }
+.settings .wname { font-size: 38px; line-height: 46px; font-weight: 700; }
+/* compact widget in an icon slot */
+.icons .wface { padding: 18px 20px; }
+.icons .ring { width: 100px; height: 100px; } .icons .ring .rv { font-size: 30px; } .icons .ring .rv > small { display: none; }
+.icons .gpu { gap: 16px; } .icons .wcol .num { font-size: 29px; line-height: 34px; }
+.icons .big { font-size: 44px; line-height: 48px; } .icons .settings .gear { width: 52px; height: 52px; }
+.icons .models li { font-size: 21px; line-height: 26px; }
+.icons .wsub { display: none; } .icons .bar { margin-bottom: 0; } .icons .settings .wname { font-size: 31px; line-height: 38px; }
+.icons .settings .gear { margin: 0 0 auto; }
+/* big widget in the Top Shelf */
+.info .wface { position: static; padding: 0; background: none; }
+.info .wt { font-size: 31px; }
+.info .gpu { gap: 60px; } .info .ring { width: 340px; height: 340px; } .info .ring .rv { font-size: 104px; }
+.info .ring .rv > small { font-size: 31px; } .info .wcol .num { font-size: 76px; line-height: 90px; }
+.info .big { font-size: 140px; line-height: 150px; } .info .bar { width: 900px; height: 16px; border-radius: 8px; }
+.info .models li { font-size: 48px; line-height: 60px; gap: 20px; } .info .models li::before { width: 18px; height: 18px; } .info .settings .gear { width: 150px; height: 150px; }
+.info .wsub { font-size: 31px; line-height: 40px; }
+
+/* lower rows: rows scrolling off the top dissolve under the status chips */
+#fade { position: absolute; z-index: 4; left: 0; top: 0; width: 1920px; height: 150px; pointer-events: none; opacity: 0;
+  background: linear-gradient(var(--bg) 0%, rgba(7, 8, 11, .9) 45%, rgba(7, 8, 11, 0) 100%); transition: opacity .45s ease; }
+#stage:not(.ondock) #fade { opacity: 1; }
+
+/* ---------- status chips, toasts ---------- */
+#chips { position: absolute; z-index: 5; top: 44px; right: var(--safe-x); display: flex; gap: 12px;
+  transition: opacity .14s .1s; }   /* leaving the app switcher: back once a toast in their row has glided under it */
+.chip { display: inline-flex; align-items: center; gap: 10px; height: 50px; padding: 0 22px; border-radius: 25px;
+  font-size: 25px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; white-space: nowrap;
+  background: var(--glass); backdrop-filter: blur(24px) saturate(160%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .17), inset 0 0 0 1px rgba(255, 255, 255, .05); }
+.chip[hidden] { display: none; }
+.chip i { width: 10px; height: 10px; border-radius: 50%; background: var(--green); box-shadow: 0 0 8px var(--green); }
+#chip-off i { background: #ff9f0a; box-shadow: 0 0 8px #ff9f0a; }
+#toasts { position: absolute; z-index: 9; top: 120px; right: var(--safe-x); width: 620px; display: flex; flex-direction: column;
+  align-items: flex-end; gap: 14px; pointer-events: none; transition: translate .3s var(--ease); }
+.toast { max-width: 620px; padding: 20px 30px; border-radius: 30px; font-size: 29px; line-height: 36px; font-weight: 600;
+  background: rgba(22, 22, 26, .5); backdrop-filter: var(--blur);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .18), 0 20px 50px rgba(0, 0, 0, .45);
+  opacity: 0; transform: translateY(-16px) scale(.97); transition: opacity .3s, transform .4s var(--ease); }
+.toast.on { opacity: 1; transform: none; }
+.toast.err { background: rgba(120, 18, 22, .55); }
+.toast.warn { background: rgba(150, 95, 0, .6); }
+
+/* ---------- voice overlay (Siri-like) ---------- */
+#voice { position: absolute; z-index: 9; left: 50%; bottom: 70px; width: 1120px; min-height: 150px; margin-left: -560px;
+  display: flex; align-items: center; gap: 36px; padding: 26px 56px 26px 28px; border-radius: 75px;
+  background: rgba(20, 20, 24, .42); backdrop-filter: var(--blur);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), inset 0 0 0 1px rgba(255, 255, 255, .06), 0 30px 90px rgba(0, 0, 0, .5);
+  opacity: 0; visibility: hidden; transform: translateY(40px) scale(.96);
+  transition: opacity .35s ease, transform .5s var(--ease), visibility 0s .5s; }
+.talk #voice { opacity: 1; visibility: visible; transform: none; transition-delay: 0s; }
+.orb { position: relative; flex: none; width: 98px; height: 98px; }
+.orb i { position: absolute; inset: 0; border-radius: 50%;
+  background: conic-gradient(from 0deg, #5ac8fa, #bf5af2, #ff375f, #ff9f0a, #ffd60a, #5ac8fa); filter: blur(9px); }
+.orb i + i { inset: 14px; filter: blur(6px); opacity: .9; background: conic-gradient(from 180deg, #64d2ff, #5e5ce6, #ff2d55, #64d2ff); }
+.orb b { position: absolute; inset: 24px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, rgba(255, 255, 255, .25) 40%, rgba(255, 255, 255, 0) 70%); }
+.talk .orb i { animation: spin 2.6s linear infinite; }
+.talk .orb i + i { animation-duration: 1.7s; animation-direction: reverse; }
+[data-phase=listening] .orb { animation: breathe 1.2s ease-in-out infinite alternate; }
+[data-phase=thinking] .orb i { animation-duration: .9s; }
+[data-phase=error] .orb i { filter: blur(9px) grayscale(1) brightness(.7); }
+@keyframes spin { to { transform: rotate(1turn); } }
+@keyframes breathe { from { transform: scale(.88); } to { transform: scale(1.06); } }
+.vtext { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+#vphase { font-size: 25px; line-height: 32px; font-weight: 600; letter-spacing: .02em; color: var(--label-2); }
+#vtrans { font-size: 38px; line-height: 46px; font-weight: 600; }
+#vtrans:empty, #vreply:empty, #vphase:empty { display: none; }
+#vreply { font-size: 29px; line-height: 36px; color: rgba(255, 255, 255, .85); }
+#edge { position: absolute; z-index: 8; left: -10%; width: 120%; bottom: -150px; height: 300px; pointer-events: none; opacity: 0;
+  background: radial-gradient(40% 50% at 25% 50%, rgba(94, 92, 230, .7), transparent 70%),
+    radial-gradient(35% 50% at 55% 50%, rgba(255, 55, 95, .55), transparent 70%),
+    radial-gradient(35% 50% at 80% 50%, rgba(90, 200, 250, .6), transparent 70%);
+  transition: opacity .6s ease; }
+.talk #edge { opacity: 1; animation: drift 6s ease-in-out infinite alternate; }
+@keyframes drift { to { transform: translateX(-7%); } }
+
+/* ---------- command bar ---------- */
+#veil { position: absolute; z-index: 7; inset: 0; background: rgba(0, 0, 0, .45); opacity: 0; pointer-events: none; transition: opacity .4s; }
+.cmd #veil { opacity: 1; }
+#cmd { position: absolute; z-index: 9; left: 50%; bottom: 250px; width: 1120px; margin: 0 0 0 -560px; visibility: hidden;
+  opacity: 0; transform: translateY(20px); transition: opacity .3s, transform .4s var(--ease), visibility 0s .4s; }
+.cmd #cmd { visibility: visible; opacity: 1; transform: none; transition-delay: 0s; }
+#cmd input { width: 100%; height: 104px; padding: 0 48px; border: 0; border-radius: 52px; outline: none; font: 600 38px var(--font);
+  color: #fff; background: rgba(20, 20, 24, .5); backdrop-filter: var(--blur);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .2), inset 0 0 0 2px rgba(255, 255, 255, .1), 0 30px 90px rgba(0, 0, 0, .5); }
+#cmd input::placeholder { color: var(--label-3); }
+#lock { position: absolute; z-index: 10; inset: 0; display: grid; place-content: center; text-align: center; gap: 16px; font-size: 38px; background: var(--bg); }
+#lock[hidden] { display: none; }
+#lock a { color: #64d2ff; }
+/* ---------- app launch splash (app.js grow/shrink) and the demo's drawn pointer ---------- */
+#launch { position: absolute; inset: 0; z-index: 6; overflow: hidden; pointer-events: none; }
+#launch .zoom { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+#launch .zoom .face { border-radius: inherit; box-shadow: 0 40px 120px rgba(0, 0, 0, .6); }
+#launch .zoom .face::after { display: none; }
+#launch .app { position: absolute; inset: 0; opacity: 0; }
+#launch .app > img.hero { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 60% 30%; }
+#launch .scrim { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0, 0, 0, .72), rgba(0, 0, 0, .12) 62%, transparent),
+  linear-gradient(0deg, rgba(0, 0, 0, .6), transparent 50%); }
+#launch .who { position: absolute; left: var(--safe-x); bottom: 140px; display: grid; gap: 34px; justify-items: start; }
+#launch .who .logo { max-width: 660px; max-height: 290px; object-fit: contain; object-position: left bottom;
+  filter: drop-shadow(0 8px 30px rgba(0, 0, 0, .6)); }
+#launch .who .wm { margin: 0; font: 800 120px/1 var(--font); letter-spacing: -.03em; }
+#launch .sum { margin: 0; max-width: 1100px; font: 500 30px/40px var(--font); color: rgba(255, 255, 255, .85);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+#launch .sum b { color: var(--spark); font-weight: 700; }
+#launch .plain .who { bottom: 90px; }
+#launch .st { display: flex; align-items: center; gap: 20px; padding: 14px 22px; border-radius: 999px; font: 600 27px/1 var(--font);
+  color: #fff; background: rgba(0, 0, 0, .45); backdrop-filter: blur(20px); }
+#launch .bar { width: 160px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); overflow: hidden; }
+#launch .bar i { display: block; width: 36%; height: 100%; border-radius: inherit; background: #fff; animation: lbar 1.1s ease-in-out infinite; }
+#launch.up .bar { display: none; }
+@keyframes lbar { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+.snap, .snap * { transition: none !important; }
+
+/* ---------- app switcher (app.js sw*): Home and every open app as 16:9 "desktop" cards. Each card is the tile stack
+   placed by its own translate3d (neighbours glide into a closed card's place); app.js sets the size (--tw/--th,
+   --z = width/260) on #swrow. Above #launch, so a shrinking splash settles under it. ---------- */
+#switcher { position: absolute; z-index: 8; inset: 0; visibility: hidden; opacity: 0; transition: opacity .18s, visibility 0s .18s; }
+/* Mission Control's step back: the launcher shrinks a little and fades as the switcher's own backdrop, the wallpaper
+   under a dim, fades in over it; on the way out it fades back in at full size (a splash shrinking into its tile finds it
+   in place). Opaque, so nothing behind the cards reads (a dim alone let the launcher's pills and titles through into the
+   cards' labels), and no backdrop-filter: the TV's Chrome may composite in software. A soft light behind the row keeps
+   it from reading as a void, and lets the lift read */
+#switcher::before { content: ""; position: absolute; inset: 0; background: radial-gradient(62% 34% at 50% 46%,
+  rgba(120, 132, 180, .16), transparent 72%), linear-gradient(rgba(0, 0, 0, .3) 0 0), var(--wall); }
+.sw #switcher { visibility: visible; opacity: 1; transition: opacity .24s; }
+/* (the launcher, its status chips too, fades faster than the backdrop comes: by 120 ms nothing of it reads) */
+.sw :is(#page, #shelf, #chips) { scale: .94; opacity: 0;
+  transition: transform .55s var(--ease), scale .3s var(--ease), opacity .14s; }
+.sw :is(#page, #shelf) * { animation-play-state: paused !important; }   /* no sway or Ken Burns under it (CPU) */
+#switcher.go :is(#swrow, #swhint) { visibility: hidden; }   /* a switch: the cards go in the frame the zoom starts... */
+.swgo #launch { z-index: 9; }                                /* ...and the zoom rises above the backdrop fading out under it */
+#swrow { position: absolute; inset: 0; transition: opacity .2s; }
+/* the cards and hint come in at 120 ms, once the launcher is gone, never over it */
+.sw :is(#swrow, #swhint) { animation: swin .2s .12s backwards; }
+@keyframes swin { from { opacity: 0; } }
+.tile.card { position: absolute; left: 0; top: 0; --focus: 1.12; --r: calc(11px + 2.5px * var(--z, 1)); transition: transform .45s var(--ease); }
+#swrow.settle .tile.card { transition-delay: .28s; }   /* a close: the fly-off first, then the neighbours glide in */
+.fast .tile.card { transition-duration: .2s; }
+.card .lift { transition-property: transform, translate; }
+.idle .card.focused .lift { transform: scale(var(--focus)); }   /* no idle growth: two 720 px cards would touch */
+.card.ptr .lift { translate: 0 calc(var(--ly, 0) * -1px); }      /* Siri: a resting finger drifting up previews the throw */
+.card.armed .lift { translate: 0 -30px; }
+/* the focused card from 10 ft, whatever its face (YouTube's white one, a pale sky): a ring clear of its edge, as
+   around Mission Control's current desktop; red when armed. The other faces dim as idle tiles do */
+.card.focused .face { outline: 4px solid #fff; outline-offset: 4px; }
+.card.armed .face { outline-color: #ff453a; }
+.card .shade { z-index: 5; transition-duration: .3s; }   /* (under the lit rim: a dark face keeps its edge) */
+.card:not(.focused) .shade { opacity: .4; }
+.card.closing .shade { opacity: .5; }   /* the face at half: one layer, so art and snapshot don't blend */
+/* a long title (a window's) never spills off its face: app.js sizes it to fit two lines, and a clamp backs that up (3
+   lines, 2 under a state pill). The clip is .1em under the last line (in its padding), with lines 1.2 apart: below every
+   descender and above the next line's letters in SF Pro, Inter, Ubuntu Sans and Cantarell. At the tiles' 1.02 no clip
+   fits between the two in all four (the last one cut Spotify's p and y). Clamped lines clip only vertically: Chrome
+   centres a clamped line before adding its ellipsis, which then ran past the box */
+.card .wm { font-size: calc(var(--fs) * var(--z, 1)); line-height: 1.2; display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3; overflow: visible clip; padding-bottom: .1em; margin-bottom: -.1em; }
+.card:is(.starting, .closing, .stuck) .wm { -webkit-line-clamp: 2; }
+/* a state pill never sits on a logo or wordmark: they move under it (it ends at 56 px) */
+.card:is(.starting, .closing, .stuck) .l1 { padding-top: 60px; }
+.card .snap { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #0b0b0f; opacity: 0; }
+.card .snap.on { opacity: 1; }
+.card .st { position: absolute; z-index: 7; top: 12px; right: 12px; display: none; align-items: center; gap: 12px; height: 44px;
+  padding: 0 18px; border-radius: 22px; background: rgba(0, 0, 0, .66); font-size: 25px; font-weight: 700; letter-spacing: .01em;
+  white-space: nowrap; }   /* where the launcher's Running pill sits */
+.card:is(.starting, .closing, .stuck) .st { display: inline-flex; }
+.card.stuck .st { background: #ff9f0a; color: #111; }
+.card .ld { width: 44px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); overflow: hidden; }
+.card .ld i { display: block; width: 36%; height: 100%; border-radius: inherit; background: #fff; animation: lbar 1.1s ease-in-out infinite; }
+.card.stuck .ld { display: none; }
+/* the pointer's quit: over the focused card's top-left corner while the mouse/trackpad is in use, clear of its face (in
+   it, it met the state pill or the wordmark on a 300 px card) and its ring; it says what it does, not just × */
+.card .x { position: absolute; z-index: 7; bottom: calc(100% + 14px); left: 0; display: none; align-items: center; gap: 10px;
+  height: 52px; padding: 0 22px 0 8px; border-radius: 26px; background: rgba(0, 0, 0, .66); font-size: 25px; font-weight: 700;
+  cursor: pointer; }
+.card .x i { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: #fff; color: #111;
+  font: 700 28px/1 var(--font); }
+.mouse .card.focused:not(.closing) .x { display: inline-flex; }
+/* max-content: the base .label is shrink-to-fit from left 50%, so a detail line that may wrap would get half the card.
+   Titles take up to four balanced lines in the card's width, so a long one reads whole on every card (three cut
+   "…Redemption 2 Setup" in Inter; two, unfocused, ended in an ellipsis 4-13 px off-centre: Chrome centres a clamped
+   line before adding it, and no CSS clamp in Chrome 154 centres it), never cut mid-word ("The Witcher 3: / Wild Hunt"
+   on a 300 px card: app.js keeps a number with its word); only a longer one ends in an ellipsis (69 characters fit at
+   300 px in SF Pro, Inter, Ubuntu Sans and Cantarell). The focused card's detail line wraps in balanced lines as wide as
+   the card (the stuck line is 510-560 px at 25 px), never cut; the armed one never wraps, in the base label's width
+   (338-368 px in SF Pro, Ubuntu Sans, Cantarell and Inter: at 300 px a neighbour's title starts 190 px from the centre) */
+.card .label { width: max-content; opacity: 1; text-align: center; }
+.card.peek :is(.label, .st) { opacity: 0; }   /* a card peeking past the visible run: the stage edge would cut them */
+.card .label b { max-width: var(--tw); color: var(--label-2); white-space: normal; text-wrap: balance;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: visible clip;
+  padding-bottom: 3px; margin-bottom: -3px; }   /* (inside the clip: Cantarell's descenders hang 1 px below the line) */
+.card.focused .label b { color: #fff; }
+.card .label .note { max-width: calc(var(--tw) * var(--focus)); font-size: 25px; line-height: 32px; opacity: 0; }
+.card.focused .label .note { opacity: 1; white-space: normal; text-wrap: balance; }
+.card.armed .label .note { max-width: none; white-space: nowrap; color: #fff; background: rgba(255, 69, 58, .85); }
+.card .label .note:empty, .card:is(.starting, .closing):not(.armed) .label .note { display: none; }   /* (its pill says it) */
+/* Home's face: the wallpaper, lit (as is, on the dimmed wallpaper behind the row, it read as a hole) */
+.homeface { background: radial-gradient(90% 75% at 20% 0%, rgba(84, 106, 200, .42), transparent 72%),
+  radial-gradient(60% 60% at 96% 100%, rgba(118, 185, 0, .14), transparent 70%), linear-gradient(#191b23, #0c0d11); }
+.homeface .minidock { position: absolute; left: 4.17%; right: 4.17%; top: 66.67%; height: 14.44%; display: flex; gap: 2.08%; }
+.homeface .minidock i { flex: 1; border-radius: calc(var(--z, 1) * 2px); }
+#swhint { position: absolute; left: 50%; top: 960px; transform: translate(-50%, -50%); padding: 10px 28px; border-radius: 26px;
+  font-size: 25px; line-height: 32px; font-weight: 600; letter-spacing: .02em; color: var(--label-2); white-space: nowrap;
+  background: rgba(255, 255, 255, .06); transition: opacity .2s; }
+#switcher:is(.sheet, .armed) #swhint, .talk #swhint { opacity: 0; }   /* armed: OK quits, so no "OK to open"; talk: the
+   voice panel takes its place, under a 720 px card's label: the words on one line, the reply on up to two (a refused
+   quit's is the only word it gets: "…can't be asked to quit safely: quit it from its own menu, or force quit it."), and
+   no "Couldn't do that" over it (the grey orb says so) */
+/* Home can't be quit, nor can a card already quitting (its pill says so); alone, OK and Back both just go back to the
+   launcher: no hint */
+#switcher:has(.card:is(.home, .closing).focused) #swhint span { display: none; }
+#switcher:not(:has(.card:not(.home, .bye))) #swhint { opacity: 0; }
+.sw #vtrans { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sw #vreply:not(:empty) { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.sw [data-phase=error] #vphase { display: none; }
+/* toasts: up into the status chips' row (under the backdrop), the newest only, at most 3 lines (clipped at the content
+   box: a 4th showed in the padding), so they never reach a card. They glide there once the chips are gone (.14 s) and
+   back before they return (swClose drops the older ones it hid) */
+.sw #toasts { translate: 0 -60px; transition-delay: .14s; }
+.sw .toast { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: clip;
+  overflow-clip-margin: content-box; }
+.sw .toast ~ .toast { opacity: 0; }
+#switcher.sheet #swrow { opacity: .3; }
+#switcher.sheet .card :is(.label, .x) { opacity: 0; }   /* no title, detail line, quit or focus ring peeking out from */
+#switcher.sheet .card .face { outline: none; }          /* under the sheet */
+/* force quit (and Settings' Power and Keep sheets): the safe pill starts focused; opaque, no backdrop-filter (what's
+   behind dims to .3; nothing of it shows through) */
+:is(#swsheet, #setsheet) { position: absolute; left: 50%; top: 50%; width: 880px; min-height: 340px; padding: 44px 56px 40px;
+  border-radius: 52px; display: flex; flex-direction: column; align-items: center; text-align: center; background: rgb(30, 30, 34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), inset 0 0 0 1px rgba(255, 255, 255, .06), 0 40px 120px rgba(0, 0, 0, .55);
+  visibility: hidden; opacity: 0; transform: translate(-50%, -50%) scale(1.06);
+  transition: opacity .16s, transform .24s var(--ease), visibility 0s .24s; }
+:is(#switcher.sheet #swsheet, #settings.sheet #setsheet) { visibility: visible; opacity: 1; transform: translate(-50%, -50%);
+  transition-delay: 0s; }
+:is(#swsheet, #setsheet) h2 { margin: 0; font-size: 46px; line-height: 56px; font-weight: 700; text-wrap: balance; }
+#swsheet h2 span { display: inline-block; }   /* the app's name whole: "Force quit / Red Dead Redemption 2?" */
+:is(#swsheet, #setsheet) p { margin: 20px 0 40px; font-size: 29px; line-height: 36px; color: rgba(255, 255, 255, .78); text-wrap: balance; }
+:is(#swsheet, #setsheet) .btns { display: flex; gap: 24px; margin-top: auto; }
+:is(#swsheet, #setsheet) .pill { display: grid; place-items: center; height: 76px; min-width: 300px; padding: 0 44px; border-radius: 38px;
+  font-size: 29px; font-weight: 700; background: rgba(255, 255, 255, .14); transition: transform var(--t-in) var(--ease); }
+:is(#swsheet, #setsheet) .pill.on { background: #fff; color: #111; transform: scale(1.06); }
+:is(#swsheet, #setsheet) .pill.force.on { background: #ff453a; color: #fff; }
+:is(#swlive, #setlive) { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- Settings (app.js set*): tvOS Settings on the full stage, opaque as the app switcher (the launcher fades out
+   under the dimmed wallpaper; no backdrop-filter). Sections x 80-700, rows x 760-1840, both from y 200: pills 76 px tall,
+   84 apart (app.js ROW). The focused one is white with dark text at 1.03; its section keeps a faint pill while focus is
+   in the pane. Only transform and opacity animate. ---------- */
+#settings { position: absolute; z-index: 8; inset: 0; visibility: hidden; opacity: 0; transition: opacity .18s, visibility 0s .18s; }
+#settings::before { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(0, 0, 0, .45) 0 0), var(--wall); }
+.set #settings { visibility: visible; opacity: 1; transition: opacity .24s; }
+.set :is(#page, #shelf, #chips) { opacity: 0; transition: opacity .14s; }
+.set :is(#page, #shelf) * { animation-play-state: paused !important; }   /* no sway or Ken Burns under it (CPU) */
+#settings > h1 { position: absolute; left: var(--safe-x); top: var(--safe-y); margin: 0; font-size: 57px; line-height: 66px; font-weight: 700; }
+#setlist { position: absolute; left: var(--safe-x); top: 200px; width: 620px; }
+#setpane { position: absolute; left: 760px; top: 200px; width: 1080px; bottom: var(--safe-y); }
+#settings.sheet :is(h1, #setlist, #setpane) { opacity: .3; }
+#sethead { display: none; margin: 0; padding: 0 28px; font-size: 38px; line-height: 50px; font-weight: 700; cursor: pointer; }
+.pushed #sethead { display: block; }
+/* the rows' window: wider than the pane by the focused pill's growth (1.03) on each side, clipped below the safe area.
+   ponytail: a long list's last row is cut at its bottom edge, the hint that more follows; tvOS fades it (a mask-image,
+   if the cut reads as a glitch on the TV) */
+#setview { position: absolute; left: -40px; right: -40px; top: -8px; bottom: 0; padding: 8px 40px 0; overflow: hidden; }
+.pushed #setview { top: 72px; }   /* (app.js HEAD: 80) */
+#setbody { transition: transform .3s var(--ease); }
+.srow { position: relative; isolation: isolate; display: flex; align-items: center; gap: 24px; height: 76px; margin-bottom: 8px;
+  padding: 0 28px; border-radius: 18px; white-space: nowrap; transition: transform var(--t-out) var(--ease); }
+.srow::before { content: ""; position: absolute; z-index: -1; inset: 0; border-radius: inherit; background: #fff; opacity: 0;
+  transition: opacity var(--t-out) var(--ease); }
+.srow.sel::before { opacity: .14; }
+.srow.on { color: #111; transform: scale(1.03); transition-duration: var(--t-in); }
+.srow.on::before { opacity: 1; transition-duration: var(--t-in); }
+.fast .srow, .fast .srow::before { transition-duration: var(--t-fast); }
+.srow svg { flex: none; width: 40px; height: 40px; }
+.srow .lab { flex: none; }
+.srow .val { margin-left: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--label-2); }
+.srow.on .val { color: rgba(0, 0, 0, .6); }
+.srow.more::after { content: "›"; flex: none; margin: -6px 0 0 -10px; font-size: 44px; font-weight: 400; color: var(--label-3); }
+.srow.more.on::after { color: rgba(0, 0, 0, .45); }
+.srow.code .val { font-size: 44px; font-weight: 700; letter-spacing: .08em; color: #fff; font-variant-numeric: tabular-nums; }
+.srow.code.on .val { color: #111; }
+.slider .trk { flex: none; margin-left: auto; width: 400px; height: 8px; border-radius: 4px; background: rgba(255, 255, 255, .22);
+  overflow: hidden; transition: transform var(--t-in) var(--ease); }
+.slider.grab .trk { transform: scaleY(1.75); }   /* taken (OK): Left and Right step it, OK or Back lets go */
+.slider.on.grab .trk i { background: #0a84ff; }
+.slider .trk i { display: block; height: 100%; border-radius: inherit; background: #fff; transform-origin: left; transform: scaleX(0);
+  transition: transform .2s var(--ease); }
+.slider .val { flex: none; width: 110px; margin-left: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.slider.on .trk { background: rgba(0, 0, 0, .14); }
+.slider.on .trk i { background: #111; }
+.choice .lab { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.choice .val { flex: none; margin-left: 0; font-size: 25px; }
+.choice.chk::after { content: ""; flex: none; width: 13px; height: 26px; margin: -8px 6px 0 4px; border: solid currentColor;
+  border-width: 0 4px 4px 0; transform: rotate(45deg); }   /* the value it has: a checkmark */
+#setfoot { padding: 18px 28px 0; font-size: 25px; line-height: 33px; color: var(--label-2); }
+#setfoot p { margin: 0 0 14px; text-wrap: pretty; }
+#setrows .help { display: grid; grid-template-columns: 200px 1fr; gap: 18px 24px; margin: 0; padding: 6px 28px; font-size: 27px; line-height: 36px; }
+.help dt { color: var(--label-2); font-weight: 600; }
+.help dd { margin: 0; }
+.help kbd { font: inherit; font-weight: 700; }
+/* the test pattern (§2.6): black level 0-24, a ramp, white level 230-255, each bar's level under it */
+#pattern { position: absolute; z-index: 1; inset: 0; background: #000; }
+#pattern[hidden], #setbye[hidden] { display: none; }
+#pattern :is(.pb, .pr, .pw) { position: absolute; left: var(--safe-x); width: 1760px; display: flex; }
+#pattern .pb { top: 110px; height: 300px; }
+#pattern .pr { top: 500px; height: 90px; background: linear-gradient(90deg, #000, #fff); }
+#pattern .pw { top: 640px; height: 220px; }
+#pattern i { position: relative; flex: 1; font-style: normal; }
+.pat #toasts { opacity: 0; }   /* nothing over the bars (a toast came over 18-24) */
+#pattern i b { position: absolute; left: 0; right: 0; top: calc(100% + 8px); text-align: center; font-size: 25px; line-height: 32px;
+  font-weight: 600; color: #8e8e93; }
+#pattern p { position: absolute; left: var(--safe-x); right: var(--safe-x); bottom: var(--safe-y); margin: 0; text-align: center;
+  font-size: 29px; line-height: 36px; color: var(--label-2); }
+#setbye { position: absolute; z-index: 2; inset: 0; display: grid; place-content: center; background: #000; font-size: 46px; font-weight: 700; }
+/* toasts: the newest only, up beside the title (out of the rows' way), as wide as two lines of an error need */
+.set #toasts { width: 1300px; translate: 0 -60px; }
+.set .toast { max-width: 1300px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: clip;
+  overflow-clip-margin: content-box; }
+.set .toast ~ .toast { opacity: 0; }
+#vcur[hidden] { display: none; }   /* [hidden] doesn't hide an <svg> by itself */
+#vcur { position: absolute; z-index: 21; left: 0; top: 0; pointer-events: none; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .5)); }
+/* long-idle dim: keeps a static TV picture from sitting at full brightness for hours; the endless sway/Ken Burns pause
+   under it so the compositor idles (Spark, SwiftShader: ~70 % -> 10 % of a core). The daemon's sleep (app.js doze):
+   drowsy, its 10 s warning, says why over the same dim; dark goes black before the signal goes (1.5 s). The words sit
+   beside the dim, not in it (in it they faded with it: 213 and 129 of 255 on the page, about half that on the TV
+   through the daemon's gamma dim [M]), all white, on a black plate no row behind can cross */
+#sleep { position: absolute; z-index: 20; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 3s ease; }
+.asleep #sleep { opacity: .82; }
+.drowsy #sleep { opacity: .82; transition-duration: .6s; }
+.dark #sleep { opacity: 1; transition-duration: 1.2s; }
+:is(.asleep, .drowsy, .dark) * { animation-play-state: paused !important; }
+#sleepmsg { position: absolute; z-index: 20; left: 50%; top: 50%; transform: translate(-50%, -50%); display: flex;
+  flex-direction: column; align-items: center; gap: 16px; white-space: nowrap; pointer-events: none; opacity: 0;
+  transition: opacity .4s; }
+#sleepmsg::before { content: ""; position: absolute; z-index: -1; inset: -140px -280px;
+  background: radial-gradient(closest-side, #000 60%, transparent); }
+#sleepmsg b { font-size: 57px; line-height: 66px; font-weight: 700; font-variant-numeric: tabular-nums; }
+#sleepmsg > span { font-size: 29px; line-height: 36px; }
+.drowsy #sleepmsg { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .focused .tilt, .focused .layer, .focused .spec, .away .pane.on .art, .talk .orb i, .talk #edge, [data-phase] .orb,
+  .card .ld i, #swrow, #swhint { animation: none !important; }
+  .focused .tilt { transform: none; }
+  #page, #shelf, #chips, .strip, .info, #switcher, #swrow, #swhint, #swsheet, #swsheet .pill, .tile.card, .card .lift,
+  .card .shade, #toasts, #settings, #setbody, .srow, .srow::before, .slider .trk, .slider .trk i, #setsheet, #setsheet .pill, #sleep,
+  #sleepmsg { transition-duration: .01s !important; }
+}

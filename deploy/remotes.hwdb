@@ -1,0 +1,51 @@
+# SparkHome remote key remaps: a udev hwdb template.
+# 'deploy/install.sh root' installs this file as /etc/udev/hwdb.d/61-sparkhome-remotes.hwdb and applies it
+# (systemd-hwdb update --usr, then udevadm trigger when it has active entries); 'deploy/install.sh root undo' removes it.
+# As shipped, every entry is disabled, so installing it changes nothing.
+#
+# Why: some remote keys never reach the launcher, or reach the wrong program.
+#   - Xorg can't deliver evdev codes >= 248: KEY_OK 352, KEY_SELECT 353, KEY_VOICECOMMAND 582, KEY_ROOT_MENU 618...
+#   - GNOME grabs KEY_SEARCH (opens the Overview over the kiosk) and KEY_POWER (power-off dialog).
+#   - Chrome navigates on KEY_BACK / KEY_HOMEPAGE whenever SparkHome's daemon isn't holding those keys.
+# So remap each such key to one that works everywhere:
+#   OK / Select -> enter    Back -> esc    Home -> f14 (XF86Launch5 = SparkHome Home)
+#   Search / Voice -> f15 (XF86Launch6 = SparkHome push-to-talk)    Power -> reserved (the key does nothing)
+# FLIRC dongles need none of this: you choose their keys when programming them (deploy/flirc-apple-remote.md).
+#
+# How:
+# 1. The remote's IDs, no root needed:  cat /proc/bus/input/devices
+#      I: Bus=0003 Vendor=1a2c Product=40e3 Version=0110      <- bus 0003 = USB, 0005 = Bluetooth
+#      N: Name="..."        H: Handlers=sysrq kbd event12
+#    hwdb wants 4-digit UPPERCASE hex:  evdev:input:b0003v1A2Cp40E3*
+#    or the device name (the match must end in ':*'):  evdev:name:<Name>:*
+# 2. Each key's scancode. Reading a remote's events needs root (keyboard-class nodes are root:input). From ~/sparkhome:
+#      sudo python3 -m sparkhome.inputs --probe
+#    or, without sudo, GameSpark's privileged-container trick (docker group):
+#      docker run --rm -it --privileged --pid=host alpine nsenter -t 1 -m -u -i -n -p -- \
+#        sh -c 'cd ~spark/sparkhome && python3 -m sparkhome.inputs --probe'
+#    Each press shows its MSC_SCAN scancode (e.g. 0xc0221) and the KEY_ it produces now.
+# 3. Enable a block below by deleting the single '#' at the start of each of its lines, then fix the IDs and
+#    scancodes. Scancodes are lowercase hex without 0x: HID consumer-page keys are c0xxx, keyboard-page keys 7xxxx.
+#    Property lines start with exactly ONE space; a blank line ends a block.
+# 4. deploy/install.sh root, then check:  udevadm info -q property -n /dev/input/eventN | grep KEYBOARD_KEY
+#    A remap you remove later stays applied until the remote is re-plugged or the Spark reboots.
+#
+# Example A: a USB 2.4 GHz remote dongle (G20S-class voice air mouse). The usages are the common HID ones; confirm
+# each with --probe and delete the lines your remote doesn't send. VVVV/PPPP = vendor/product from step 1.
+#evdev:input:b0003vVVVVpPPPP*
+# KEYBOARD_KEY_c0041=enter            # Menu Pick, the OK key on many remotes (KEY_SELECT 353, invisible to X11)
+# KEYBOARD_KEY_c0224=esc              # AC Back (KEY_BACK: Chrome would go back in history)
+# KEYBOARD_KEY_c0223=f14              # AC Home (KEY_HOMEPAGE) -> F14 = SparkHome Home
+# KEYBOARD_KEY_c0221=f15              # AC Search, the mic key on many remotes (GNOME search) -> F15 = push-to-talk
+# KEYBOARD_KEY_c00cf=f15              # Voice Command (KEY_VOICECOMMAND 582, invisible to X11) -> F15
+# KEYBOARD_KEY_c0030=reserved         # Power (GNOME's power-off dialog)
+# KEYBOARD_KEY_10081=reserved         # System Power Down, the generic-desktop power key
+
+# Example B: the TV's own remote through a Pulse-Eight USB-CEC adapter (pulse8-cec + inputattach). The kernel's
+# CEC remote device uses bus 001E (BUS_CEC) with vendor/product 0000, and its scancodes are CEC UI command codes
+# (kernel rc-cec keymap). Check the I: line in /proc/bus/input/devices once the adapter is set up.
+#evdev:input:b001Ev0000p0000*
+# KEYBOARD_KEY_00=enter               # Select (KEY_OK 352, invisible to X11)
+# KEYBOARD_KEY_0d=esc                 # Exit / Return (KEY_EXIT)
+# KEYBOARD_KEY_09=f14                 # Root Menu (KEY_ROOT_MENU 618, invisible to X11) -> SparkHome Home
+# KEYBOARD_KEY_40=reserved            # Power (KEY_POWER)

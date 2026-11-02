@@ -1,0 +1,57 @@
+# SparkHome: the gen-1 Siri Remote's microphone. bluetoothd keeps only the first 20 bytes of each 101-byte voice frame
+# (the remote ignores its ATT MTU of 23), so sparkhome/hcitap.py reads the frames from the HCI monitor channel (btmon's;
+# binding it needs CAP_NET_RAW) and serves the remote's voice, and nothing else, to SparkHome on
+# /run/user/@UID@/sparkhome/siri-mic.sock. It runs as @USER@ from a root-owned copy, with CAP_NET_RAW alone, which it
+# gives up once the monitor socket is bound; it can't reach the network or write outside that runtime directory.
+# 'deploy/install.sh root' writes this file's @-names (user, uid, the paired remote's address from bluetoothctl) into
+# /etc/systemd/system/sparkhome-siri-mic.service, copies sparkhome/hcitap.py to /usr/local/lib/sparkhome/ and starts
+# it; 'deploy/install.sh root undo' stops it and removes both.
+#   check: systemctl status sparkhome-siri-mic; journalctl -u sparkhome-siri-mic
+[Unit]
+Description=SparkHome Siri Remote microphone (HCI monitor tap: the remote's voice frames only)
+# Started and stopped with the user's own systemd, and so with /run/user/@UID@, where the socket lives
+BindsTo=user@@UID@.service
+After=user@@UID@.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+User=@USER@
+# -I -S: no user site-packages, environment or script directory on the path; it imports the standard library only
+ExecStart=/usr/bin/python3 -I -S /usr/local/lib/sparkhome/hcitap.py --remote @REMOTE@
+Restart=on-failure
+RestartSec=5
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+UMask=0077
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindPaths=/run/user/@UID@
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+# Bluetooth works only in the host's network namespace, so no PrivateNetwork=; AF_UNIX is the socket it serves
+RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# (capset is in @privileged: it is how CAP_NET_RAW is given up)
+SystemCallFilter=capset
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=user@@UID@.service

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>SparkHome Remote</title>
+<link rel="icon" href="data:,">
+<!-- SparkHome phone remote: self-contained (no network assets). Pairs with the TV's PIN when the daemon asks (401),
+     then drives /api/action, /api/voice and shows SSE voice/toast replies. -->
+<style>
+  :root { --bg: #000; --card: #1c1c1e; --card-2: #2c2c2e; --label-2: rgba(235, 235, 245, .6); --accent: #0a84ff; --green: #30d158;
+    --font: system-ui, -apple-system, "SF Pro Text", Inter, "Ubuntu Sans", Ubuntu, Cantarell, sans-serif; color-scheme: dark; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: #fff; font: 17px/1.35 var(--font); -webkit-font-smoothing: antialiased; }
+  body { min-height: 100vh; min-height: 100dvh; padding: max(14px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); }
+  .wrap { max-width: 440px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+  header { display: flex; align-items: center; justify-content: space-between; min-height: 40px; }
+  header b { font-size: 22px; font-weight: 700; letter-spacing: -.01em; }
+  #st { display: inline-flex; align-items: center; gap: 8px; max-width: 62%; padding: 6px 12px; border-radius: 16px; background: var(--card);
+    font-size: 14px; font-weight: 600; color: var(--label-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #st::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8e8e93; }
+  #st.on::before { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  #st.off::before { background: #ff9f0a; }
+  button { font: inherit; color: inherit; border: 0; cursor: pointer; touch-action: manipulation; }
+  /* clickpad: tap a side to move, tap the centre for OK, swipe to move, hold a side to repeat */
+  #pad { position: relative; width: min(82vw, 330px); aspect-ratio: 1; margin: 6px auto 0; border-radius: 50%; touch-action: none;
+    background: radial-gradient(circle at 50% 35%, #3a3a3c, #1c1c1e 70%); user-select: none; -webkit-user-select: none;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .12), 0 20px 40px rgba(0, 0, 0, .6); }
+  #pad svg.chev { position: absolute; width: 26px; height: 26px; color: rgba(255, 255, 255, .55); transition: color .1s, transform .1s; }
+  #pad .up { top: 9%; left: 50%; margin-left: -13px; } #pad .down { bottom: 9%; left: 50%; margin-left: -13px; transform: rotate(180deg); }
+  #pad .left { left: 9%; top: 50%; margin-top: -13px; transform: rotate(-90deg); } #pad .right { right: 9%; top: 50%; margin-top: -13px; transform: rotate(90deg); }
+  #pad[data-z=up] .up, #pad[data-z=down] .down, #pad[data-z=left] .left, #pad[data-z=right] .right { color: #fff; }
+  #ok { position: absolute; left: 31%; top: 31%; width: 38%; height: 38%; border-radius: 50%; display: grid; place-items: center;
+    background: radial-gradient(circle at 50% 30%, #48484a, #2c2c2e); font-size: 19px; font-weight: 700; letter-spacing: .04em;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .15), 0 6px 16px rgba(0, 0, 0, .5); transition: transform .1s; pointer-events: none; }
+  #pad[data-z=ok] #ok { transform: scale(.94); background: #5a5a5e; }
+  /* the pad's buttons for VoiceOver/TalkBack (a touch surface has no roles); outside #pad so a screen reader's
+     activation is a plain click, not a simulated touch that the pad would turn into a direction */
+  /* Remote | Trackpad switch, and the trackpad: drag moves the TV's pointer, tap clicks, two fingers scroll */
+  .seg { display: flex; gap: 4px; width: min(82vw, 330px); margin: 0 auto; padding: 4px; border-radius: 12px; background: var(--card); }
+  .seg button { flex: 1; height: 34px; border-radius: 9px; background: none; color: var(--label-2); font-size: 15px; font-weight: 600; }
+  .seg button[aria-pressed=true] { background: #48484a; color: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+  #tp { position: relative; height: min(82vw, 330px); margin-top: 6px; border-radius: 28px; overflow: hidden; display: grid;
+    place-items: center; touch-action: none; user-select: none; -webkit-user-select: none; background: linear-gradient(#2c2c2e, #1c1c1e);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), 0 20px 40px rgba(0, 0, 0, .6); transition: background .15s; }
+  #tp.on { background: linear-gradient(#3a3a3c, #242426); }
+  #tp p { margin: 0; padding: 0 24px; text-align: center; font-size: 14px; line-height: 1.7; color: rgba(235, 235, 245, .38); pointer-events: none; }
+  #tp i { position: absolute; width: 48px; height: 48px; margin: -24px 0 0 -24px; border-radius: 50%; background: rgba(255, 255, 255, .22);
+    pointer-events: none; animation: tap .35s ease-out forwards; }
+  @keyframes tap { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.5); opacity: 0; } }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .keys.k4 { grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .keys button { height: 64px; border-radius: 32px; background: var(--card); display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 16px; font-weight: 600; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .07); transition: transform .08s, background .08s; }
+  .keys button:active { transform: scale(.95); background: var(--card-2); }
+  .keys svg { width: 22px; height: 22px; }
+  form { display: flex; gap: 10px; margin: 0; }
+  label.cap { display: block; margin: 0 0 8px 4px; font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--label-2); }
+  input { flex: 1; min-width: 0; height: 52px; padding: 0 16px; border: 0; border-radius: 26px; background: var(--card); color: #fff;
+    font: 17px var(--font); outline: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06); }
+  input:focus { box-shadow: inset 0 0 0 2px var(--accent); }
+  form button { flex: none; height: 52px; padding: 0 17px; border-radius: 26px; background: var(--accent); font-weight: 700; }
+  form button.go { width: 52px; padding: 0; display: grid; place-items: center; } form button.go svg { width: 24px; height: 24px; }
+  #reply { min-height: 48px; margin: 0; padding: 14px 18px; border-radius: 18px; background: var(--card); color: var(--label-2); font-size: 16px; }
+  #reply:empty { display: none; }
+  #reply b { color: #fff; font-weight: 600; }
+  #reply.err { color: #ff6961; }
+  #pair { display: flex; flex-direction: column; gap: 16px; padding-top: 10vh; text-align: center; }
+  #pair h1 { margin: 0; font-size: 28px; } #pair p { margin: 0; color: var(--label-2); }
+  #pin { flex: none; height: 72px; text-align: center; font-size: 34px; font-weight: 700; letter-spacing: .35em; padding-left: .35em; font-variant-numeric: tabular-nums; }
+  #pair button { height: 56px; border-radius: 28px; background: var(--accent); font-weight: 700; font-size: 17px; }
+  #perr { color: #ff6961; min-height: 1.4em; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><b>SparkHome</b><span id="st">Connecting…</span></header>
+
+  <form id="pair" hidden>
+    <h1>Pair this phone</h1>
+    <p>On the TV, open <b>Settings › Network</b> and enter the 6-digit PIN shown there.</p>
+    <input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="••••••" aria-label="PIN">
+    <button>Pair</button>
+    <p id="perr" aria-live="polite"></p>
+  </form>
+
+  <main id="app" class="wrap" hidden>
+    <div class="seg" role="group" aria-label="Touch surface">
+      <button id="m-pad" aria-pressed="true">Remote</button><button id="m-tp" aria-pressed="false">Trackpad</button>
+    </div>
+    <div id="tp" hidden aria-label="Trackpad: drag to move the TV's pointer, tap to click, two fingers to scroll">
+      <p>Drag to move the pointer · Tap to click<br>Two fingers to scroll<br>Two-finger tap to right&#8209;click</p>
+    </div>
+    <div id="pad" aria-label="Touch pad: tap or swipe to move, centre for OK">
+      <svg class="chev up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>
+      <svg class="chev down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>
+      <svg class="chev left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>
+      <svg class="chev right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 15l7-7 7 7"/></svg>
+      <div id="ok">OK</div>
+    </div>
+    <div class="sr"><button data-n="up">Up</button><button data-n="left">Left</button><button data-a="select">OK</button><button data-n="right">Right</button><button data-n="down">Down</button></div>
+    <div class="keys k4">
+      <button data-a="back" aria-label="Back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>Back</button>
+      <button data-a="home" aria-label="Home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/></svg>Home</button>
+      <button data-a="app_switcher" aria-label="Open apps"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="9" width="13" height="10" rx="2"/><path d="M8 6V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-1"/></svg>Apps</button>
+      <button data-m="toggle" aria-label="Play or pause"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l9-7z"/><rect x="15" y="5" width="2.5" height="14" rx="1"/><rect x="19.5" y="5" width="2.5" height="14" rx="1"/></svg></button>
+    </div>
+    <div class="keys">
+      <button data-v="down" aria-label="Volume down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12"/></svg>Vol</button>
+      <button data-v="mute" id="mute">Mute</button>
+      <button data-v="up" aria-label="Volume up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12M12 6v12"/></svg>Vol</button>
+    </div>
+    <div>
+      <label class="cap" for="ask-in">Ask SparkHome</label>
+      <form id="ask"><input id="ask-in" placeholder="Type or dictate a command" enterkeyhint="send" autocomplete="off"><button class="go" aria-label="Send"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button></form>
+    </div>
+    <div>
+      <label class="cap" for="type-in">Type into TV</label>
+      <form id="type"><input id="type-in" placeholder="Search text, passwords…" enterkeyhint="send" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"><button>Type</button></form>
+    </div>
+    <p id="reply" aria-live="polite"></p>
+  </main>
+</div>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const say = (html, err) => { const r = $('reply'); r.innerHTML = html; r.classList.toggle('err', !!err); };
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+async function post(path, body, ms) {   // ms: give up after that long (a stalled request must not freeze the trackpad)
+  try {
+    const r = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+                                 signal: ms ? AbortSignal.timeout?.(ms) : undefined});
+    if (r.status === 401) { locked(); return {ok: false}; }
+    const d = await r.json().catch(() => ({}));
+    return r.ok ? d : {ok: false, error: d.error || `HTTP ${r.status}`};
+  } catch { status('Offline', 'off'); return {ok: false, error: 'SparkHome is not answering'}; }
+}
+async function act(name, args = {}) {
+  navigator.vibrate?.(8);
+  const r = await post('/api/action', {name, args});
+  if (r.woke) say('Woke the TV.');   // it was asleep or going to sleep: this press only woke it
+  else if (r.ok === false && r.error) say(esc(r.error), true);
+  return r;
+}
+const nav = d => act('navigate', {direction: d});
+function status(text, cls) { const s = $('st'); s.textContent = text; s.className = cls || ''; }
+function locked() { $('app').hidden = true; $('pair').hidden = false; status('Not paired', 'off'); }
+
+// --- pad: tap zones, swipes (one step per 40 px), hold-to-repeat (380/110 ms) ---
+const pad = $('pad');
+let g = null;
+function zone(e) {
+  const b = pad.getBoundingClientRect(), x = e.clientX - b.left - b.width / 2, y = e.clientY - b.top - b.height / 2;
+  if (Math.hypot(x, y) < b.width * .2) return 'ok';
+  return Math.abs(x) > Math.abs(y) ? (x > 0 ? 'right' : 'left') : (y > 0 ? 'down' : 'up');
+}
+pad.addEventListener('pointerdown', e => {
+  e.preventDefault(); pad.setPointerCapture(e.pointerId);
+  const z = zone(e);
+  g = {x: e.clientX, y: e.clientY, z, moved: false, fired: false, t: 0};
+  pad.dataset.z = z;
+  if (z !== 'ok') g.t = setTimeout(function rep() { g.fired = true; nav(z); g.t = setTimeout(rep, 110); }, 380);
+});
+pad.addEventListener('pointermove', e => {
+  if (!g) return;
+  const dx = e.clientX - g.x, dy = e.clientY - g.y;
+  if (Math.hypot(dx, dy) < 40) return;
+  clearTimeout(g.t); g.moved = true; g.x = e.clientX; g.y = e.clientY;
+  const d = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+  pad.dataset.z = d; nav(d);
+});
+const end = fire => () => {
+  if (!g) return;
+  clearTimeout(g.t);
+  if (fire && !g.moved && !g.fired) g.z === 'ok' ? act('select') : nav(g.z);
+  g = null; delete pad.dataset.z;
+};
+pad.addEventListener('pointerup', end(true));
+pad.addEventListener('pointercancel', end(false));
+
+// --- trackpad: one finger moves the TV's pointer (faster swipes go further), a tap clicks, two fingers scroll
+// (natural direction, as on iOS), a two-finger tap right-clicks. Moves pile up while a request is out and go as one.
+// A tap closes its segment: its click goes out after the motion before it, never with the motion after it.
+const tp = $('tp');
+const TP = {slow: 1.6, fast: 4.5, speed: 1.5, step: 22, tap: 8, tapMs: 300};   // knobs: gain at rest / at `speed` px/ms,
+const fingers = new Map(), segs = [{dx: 0, dy: 0, sx: 0, sy: 0}];             // px per wheel step, tap slop (px, ms)
+const seg = () => segs[segs.length - 1];
+let tpBusy = false, gest = null, tpErr = null;
+const take = (o, k, lim) => { const n = Math.max(-lim, Math.min(lim, Math.trunc(o[k]))); o[k] -= n; return n; };
+async function flush() {
+  if (tpBusy) return;
+  const o = segs[0], body = {dx: take(o, 'dx', 4000), dy: take(o, 'dy', 4000), scroll_x: take(o, 'sx', 40), scroll_y: take(o, 'sy', 40)};
+  if (o.click && segs.length > 1 && !['dx', 'dy', 'sx', 'sy'].some(k => Math.trunc(o[k]))) { body.click = o.click; segs.shift(); }
+  if (!body.dx && !body.dy && !body.scroll_x && !body.scroll_y && !body.click) return;
+  tpBusy = true;
+  const r = await post('/api/pointer', body, 1500);
+  tpBusy = false;
+  if (r.ok === false) {
+    segs.splice(0, segs.length, {dx: 0, dy: 0, sx: 0, sy: 0});
+    if (r.error) { say(esc(r.error), true); tpErr = $('reply').innerHTML; }
+    return;
+  }
+  if (tpErr !== null && $('reply').innerHTML === tpErr) say('');   // clear our own stale error, never a newer message
+  tpErr = null;
+  if (r.woke) say('Woke the TV.');
+  flush();
+}
+tp.addEventListener('pointerdown', e => {
+  e.preventDefault(); tp.setPointerCapture(e.pointerId);
+  fingers.set(e.pointerId, {x: e.clientX, y: e.clientY, t: e.timeStamp, moved: 0});
+  if (!gest) {                            // a new gesture: drop the last one's sub-step fractions, keep whole units unsent
+    gest = {t: e.timeStamp, n: 1, moved: 0};
+    for (const k of ['dx', 'dy', 'sx', 'sy']) seg()[k] = Math.trunc(seg()[k]);
+  }
+  gest.n = Math.max(gest.n, fingers.size);
+  tp.classList.add('on');
+});
+tp.addEventListener('pointermove', e => {
+  const f = fingers.get(e.pointerId);
+  if (!f || !gest) return;
+  const dx = e.clientX - f.x, dy = e.clientY - f.y, dt = Math.max(1, e.timeStamp - f.t);
+  f.x = e.clientX; f.y = e.clientY; f.t = e.timeStamp;
+  f.moved += Math.hypot(dx, dy); gest.moved = Math.max(gest.moved, f.moved);   // tap slop per finger
+  if (fingers.size > 1) { seg().sx -= dx / TP.step / fingers.size; seg().sy -= dy / TP.step / fingers.size; }
+  else if (gest.n === 1) {                // not the finger left over from a two-finger scroll
+    const k = TP.slow + (TP.fast - TP.slow) * Math.min(1, Math.hypot(dx, dy) / dt / TP.speed);
+    seg().dx += dx * k; seg().dy += dy * k;
+  }
+  flush();
+});
+const lift = e => {
+  if (!fingers.delete(e.pointerId) || fingers.size || !gest) return;
+  if (e.type === 'pointerup' && gest.moved < TP.tap && e.timeStamp - gest.t < TP.tapMs) {
+    seg().click = gest.n > 1 ? 'right' : 'left'; segs.push({dx: 0, dy: 0, sx: 0, sy: 0}); navigator.vibrate?.(8);
+    const b = tp.getBoundingClientRect(), i = document.createElement('i');
+    i.style.left = `${e.clientX - b.left}px`; i.style.top = `${e.clientY - b.top}px`; tp.append(i); setTimeout(() => i.remove(), 400);
+    flush();
+  }
+  gest = null; tp.classList.remove('on');
+};
+tp.addEventListener('pointerup', lift);
+tp.addEventListener('pointercancel', lift);
+function surface(m) {
+  const t = m === 'tp';
+  pad.hidden = t; tp.hidden = !t;
+  $('m-pad').setAttribute('aria-pressed', String(!t)); $('m-tp').setAttribute('aria-pressed', String(t));
+  try { localStorage.setItem('sparkhome-surface', m); } catch {}
+}
+$('m-pad').addEventListener('click', () => surface('pad'));
+$('m-tp').addEventListener('click', () => surface('tp'));
+try { surface(localStorage.getItem('sparkhome-surface') || 'pad'); } catch { surface('pad'); }
+
+document.querySelectorAll('[data-a]').forEach(b => b.addEventListener('click', () => act(b.dataset.a)));
+document.querySelectorAll('[data-n]').forEach(b => b.addEventListener('click', () => nav(b.dataset.n)));
+document.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => act('media', {action: b.dataset.m})));
+let muted = false;
+document.querySelectorAll('[data-v]').forEach(b => b.addEventListener('click', async () => {
+  const change = b.dataset.v === 'mute' ? (muted ? 'unmute' : 'mute') : b.dataset.v;
+  const r = await act('volume', {change});
+  if (r.ok && !r.woke) {   // (a press that only woke the TV changed nothing)
+    if (typeof r.muted === 'boolean') muted = r.muted;   // the daemon's word: voice or an agent may have muted the TV
+    else if (b.dataset.v === 'mute') muted = !muted;
+    $('mute').textContent = muted ? 'Unmute' : 'Mute';
+    if (typeof r.volume === 'number') say(`Volume <b>${Math.round(r.volume)}%</b>`);
+  }
+}));
+$('ask').addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = $('ask-in').value.trim(); if (!text) return;
+  $('ask-in').value = ''; $('ask-in').blur();
+  say(`Thinking… <b>“${esc(text)}”</b>`);
+  const r = await post('/api/voice', {text});
+  if (r.ok === false && r.error) say(esc(r.error), true);
+});
+$('type').addEventListener('submit', async e => {
+  e.preventDefault();
+  const text = $('type-in').value; if (!text) return;
+  const r = await act('type_text', {text});
+  if (r.ok) { $('type-in').value = ''; say('Typed on the TV.'); }
+});
+$('pair').addEventListener('submit', async e => {
+  e.preventDefault();
+  const pin = $('pin').value.replace(/\D/g, '');
+  if (pin.length !== 6) { $('perr').textContent = 'The PIN has 6 digits.'; return; }
+  try {
+    const r = await fetch('/api/pair', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({pin})});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.token) { $('perr').textContent = d.error || 'Wrong PIN'; $('pin').select(); return; }
+    $('perr').textContent = ''; $('pin').value = ''; start();   // the daemon set an HttpOnly cookie
+  } catch { $('perr').textContent = 'SparkHome is not answering'; }
+});
+
+// --- live status + replies over SSE ---
+let es = null, retry = 1000, seen = 'Connected', asleep = false;
+function connect() {
+  es?.close();
+  es = new EventSource('/api/events');
+  es.onopen = () => { retry = 1000; };
+  es.onerror = () => {
+    status('Reconnecting…', 'off');
+    if (es.readyState === EventSource.CLOSED) { setTimeout(start, retry); retry = Math.min(retry * 2, 30000); }
+  };
+  const on = (t, fn) => es.addEventListener(t, e => { try { fn(JSON.parse(e.data) || {}); } catch {} });
+  on('state', s => {   // (shown unless the TV is asleep: then that is the news)
+    seen = s.surface === 'app' ? `Playing ${s.title || ''}` : s.surface === 'web' ? (s.title || 'Web app') : 'Home screen';
+    if (!asleep) status(seen, 'on');
+  });
+  on('sleep', s => { asleep = s.state === 'asleep'; asleep ? status('TV asleep') : status(seen, 'on'); });
+  on('voice', v => {
+    if (v.phase === 'listening') say('Listening…');
+    else if (v.phase === 'thinking') say(`Thinking…${v.transcript ? ` <b>“${esc(v.transcript)}”</b>` : ''}`);
+    else if (v.phase === 'done') say(v.reply ? `<b>${esc(v.reply)}</b>` : 'Done.');
+    else if (v.phase === 'error') say(esc(v.error || 'Something went wrong'), true);
+  });
+  on('toast', t => { if (t.text) say(esc(t.text), t.kind === 'error'); });
+}
+async function start() {
+  let r = null;
+  try { r = await fetch('/api/tiles', {cache: 'no-store'}); } catch {}
+  if (r?.status === 401) return locked();
+  if (!r?.ok) { status('Offline', 'off'); setTimeout(start, retry); retry = Math.min(retry * 2, 30000); return; }
+  $('pair').hidden = true; $('app').hidden = false; status('Connected', 'on');
+  connect();
+}
+start();
+</script>
+</body>
+</html>
