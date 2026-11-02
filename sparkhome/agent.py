@@ -191,6 +191,12 @@ TOOLS = [
     _tool("power", "Restart SparkHome, restart the Spark or shut it down: shows a confirmation on the TV; nothing happens "
           "until the person confirms it there.", ["action"],
           action={"type": "string", "enum": ["restart_sparkhome", "reboot", "shutdown"]}),
+    # The builder (builder.py), word-gated too: a bigger model builds and tests on the TV; the person keeps it there
+    _tool("build", "Build a new integration on the TV in the background: a tile for a streaming service or website, a "
+          "connection to a device or service, or help signing in to an app. A bigger model works on it and shows "
+          "progress on the TV; nothing is kept until the person presses Keep there. stop: end the build running.",
+          ["request"], request=_str("What to build, in the person's own words", 300),
+          stop={"type": "boolean", "description": "Stop the build that is running (default false)"}),
     _tool("open_settings", "Show Settings on the TV at a section.", (),
           section={"type": "string", "enum": ["display", "sound", "voice", "sleep", "controllers", "network", "power",
                                               "about"]}),
@@ -342,6 +348,11 @@ RULES = [(intent, re.compile(_PRE + _ASK + "(?:" + rx + r")(?: please| now| righ
                r"|(?:(?:turn |crank |pump )(?:it |the volume |the sound |the tv |that )?|(?:volume|sound) )(?P<way2>up|down) all the way"
                r"|(?:turn |crank |pump )(?P<way3>up|down) (?:it |the volume |the sound |the tv |that )all the way"),
     ("nav", _NAV),
+    # the builder: a new tile, integration or plugin said as such, or a thing put on the home screen; a build stopped
+    ("build", r"(?:add|build|make|create|set up|install)(?: me)?(?: a| an| the)?(?: new)? (?:tile|app tile|integration"
+              r"|connection|connector|plugin)\b.*|(?:add|put|pin) .+ (?:to|on) (?:the |my )?(?:home screen|launcher"
+              r"|sparkhome)\b.*"),
+    ("build_stop", r"(?:stop|cancel|abort) (?:the |this )?build(?:ing)?(?: it)?"),
     ("search", r"search (?:for )?(?P<q>.+) (?:on|in) (?P<t>.+?)"),  # greedy q: the service is the LAST "on X"
     ("search", r"search (?P<t>.+?) for (?P<q>.+)"),
     ("search_here", r"search (?:for )?(?P<q>.+)"),  # only inside a web app: search that app
@@ -380,7 +391,9 @@ GATED = {"close_app": re.compile(r"\b(?:close|quit|kill|shut|force)\b"),
          "get_settings": re.compile(r"\bsettings?\b|bright|resolution|sleep"),
          "brightness": re.compile(r"bright\w*|\bdim\w*|darker|\b(?:too|so|very) dark\b"),  # (not "the dark knight")
          "sleep": re.compile(r"\bsleep\w*|asleep|screen off|turn off the (?:tv|screen|display)"),
-         "open_settings": re.compile(r"\bsettings?\b")}
+         "open_settings": re.compile(r"\bsettings?\b"),
+         "build": re.compile(r"\b(?:tiles?|integrat\w*|connectors?|plugins?|build\w*|sign(?:ing)? in|log(?:ging)? in"
+                             r"|login|set up|hook up)\b")}
 NEVER = ("say", "display_mode", "power")  # never the model's: say is MCP's; the resolution and power, the person's alone
 # A model's brightness call needs the person's words to be about the picture (any page or not), and a level said as
 # one: a clause with brighter, darker, dimmer or brightness, or dark or dim said of the picture ("the screen is way too
@@ -838,7 +851,9 @@ class Agent:
             "get_settings": self._get_settings, "brightness": self._brightness, "sleep": self._sleep_tool,
             "display_mode": self._display_mode, "power": lambda action: self._prefs("ask_power", action),
             "open_settings": lambda section=None: self._prefs("open", section),
+            "build": self._build,
         }
+        self.builder = None  # builder.py's Builder, when settings.builder names a model (server.py)
         from .connectors import Connectors  # (it imports this module, so only once that has loaded)
         self.connectors = Connectors(settings.get("mcp_servers") or [], emit,  # home devices over MCP (shark.*)
                                      getattr(shell, "plugins", ()))  # ...and connector plugins (plugins.py)
@@ -984,6 +999,11 @@ class Agent:
         if not png:
             return {"ok": False, "error": "screenshot failed"}
         return {"ok": True, "image": base64.b64encode(png).decode()}
+
+    def _build(self, request, stop=False):
+        if not self.builder:
+            return {"ok": False, "error": "No builder model is set up (settings.builder)."}
+        return self.builder.stop() if stop else self.builder.start(request)   # ({"ok": False, "error"} as is)
 
     def _say(self, text):
         wake = getattr(self.shell, "wake", None)  # (a toast on a sleeping TV would go unseen: shell.py's sleep)
@@ -1184,6 +1204,8 @@ class Agent:
                 return intent, {}
             if intent == "switcher":
                 return "app_switcher", {}
+            if intent in ("build", "build_stop"):
+                return "build", {"request": text.strip()[:300], **({"stop": True} if intent == "build_stop" else {})}
             if intent == "bright":
                 return "brightness", {"change": "up" if "up" in g else "down" if "down" in g else "100" if "reset" in g
                                       else g["lvl"]}
@@ -1669,6 +1691,8 @@ class Agent:
             return s + (f" GPU {g['temp']}°C, {g.get('util', 0)}% busy." if g.get("temp") is not None else "")
         if name == "screenshot":
             return f"Screenshot saved to {r['saved']}." if r.get("saved") else "Screenshot taken."
+        if name == "build":
+            return r.get("reply") or "Building it."
         return {"home": "Home.", "back": "Back.", "select": "OK.", "type_text": "Typed it.",
                 "click": "Clicked."}.get(name, "Done.")
 
@@ -2581,6 +2605,11 @@ def _selftest():
         "search for cats": None,  # on the launcher: the LLM decides where
         "turn off the lights": None,
         "pause this and make it a bit quieter": None,
+        # the builder: the words go along whole (they say what to build, and the sign-in help with it)
+        "Add a tile for Hulu and help me log in.": ("build", {"request": "Add a tile for Hulu and help me log in."}),
+        "can you put nebula on the home screen": ("build", {"request": "can you put nebula on the home screen"}),
+        "stop the build": ("build", {"request": "stop the build", "stop": True}),
+        "add it to my list": None,
     }
     for said, want in cases.items():
         assert a._fast(said) == want, (said, a._fast(said))

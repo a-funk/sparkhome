@@ -756,9 +756,11 @@ function setOpen(sec, confirm, deep) {   // the tile's OK; SSE open_settings {se
   setPaint(); setSay(setWhere()); report(); wake();
 }
 function setClose() {   // Back from the list, Home, or anything that takes the launcher (a launch, the switcher, focus):
-  // the launcher comes back with the Settings tile focused; Home during a new resolution's Keep sheet reverts it
+  // the launcher comes back with the Settings tile focused; Home during a new resolution's Keep sheet reverts it, and
+  // during a build's, discards (the builder waits on that sheet: never on one that isn't there)
   if (!set) return false;
   if (set.sheet?.kind === 'keep') post('/api/display/revert', {});
+  if (set.sheet?.kind === 'build') post('/api/build/discard', {});
   clearTimeout(set.followT); clearInterval(set.refT); clearInterval(keepT);
   set = null; screen = 'home';
   stage.classList.remove('set', 'pat'); setEl.classList.remove('sheet'); $('#pattern').hidden = $('#setbye').hidden = true;
@@ -985,6 +987,8 @@ function setSheetPress(b) {
   setSheetClose();
   if (s.kind === 'keep') return post(b ? '/api/display/confirm' : '/api/display/revert', {}).then(r => r?.ok ||
     toast(r?.error || 'The resolution didn’t change', 'error'));
+  if (s.kind === 'build') return post(b ? '/api/build/keep' : '/api/build/discard', {}).then(r => r?.ok ||
+    toast(r?.error || 'The builder didn’t answer', 'error'));
   if (b) setPower(s.action);
 }
 function setPowerSheet(action) { const [t, why, go] = POWER[action]; setSheet({kind: 'power', action}, t, why, ['Cancel', go]); }
@@ -1017,6 +1021,14 @@ function setKeep(d) {   // SSE display pending: "Keep this resolution?" counting
     txt($('#setsb'), body());
     if (performance.now() > end + 5000) { setSheetClose(); setLoad('display'); }   // its word never came (a restart)
   }, 250);
+}
+function setBuild(d) {   // SSE build (builder.py): keep is "Keep what it made?", Discard focused; only a person's press
+  // keeps (the daemon takes it from this page alone). Any other state closes the sheet: kept, discarded, stopped
+  if (d.state === 'keep') {
+    if (!set) setOpen('about');
+    return setSheet({kind: 'build'}, d.title || 'Keep what the builder made?', d.why || '', ['Discard', 'Keep']);
+  }
+  if (set?.sheet?.kind === 'build') setSheetClose();
 }
 function setDisplay(d) {   // SSE display: pending (the sheet), kept, reverted (a toast says to what), failed (the
   // daemon's own error toast says why)
@@ -1379,6 +1391,7 @@ function connect() {
   on('sleep', doze);
   on('settings', d => setValues(d.values));
   on('display', setDisplay);
+  on('build', setBuild);
   on('open_settings', d => setOpen(typeof d.section === 'string' ? d.section : 'display', d.confirm, true));
   on('launch', d => {   // a game's launch (LAUNCH-DESIGN.md §1.4): starting (grown here if the page didn't, over the
     // switcher or Settings too, which go as on Home), prompt (Steam waits on its window, over the splash), loading (its

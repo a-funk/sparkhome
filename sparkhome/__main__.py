@@ -20,7 +20,7 @@ def main(argv=None):
     if a.selftest:
         logging.disable(logging.CRITICAL)        # the checks provoke failures on purpose; asserts are the output
         for name in ("cdp", "inputs", "siri", "siri_audio", "hcitap", "shell", "settings", "server", "agent",
-                     "connectors", "router", "plugins"):
+                     "connectors", "router", "plugins", "builder"):
             try:
                 mod = importlib.import_module(f"sparkhome.{name}")
             except ModuleNotFoundError as e:
