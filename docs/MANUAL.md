@@ -56,16 +56,23 @@ as `~/sparkhome.prev`. A sync straight into `~/sparkhome` would replace the file
 restart would run) before `enable`'s own selftest could refuse them.
 
 ```bash
-# On the Mac, from the repo
+# Either, on the Spark, from GitHub (~/sparkhome.next a clone of the repo)
+git -C ~/sparkhome.next pull --ff-only
+# or, on the Mac, from your checkout
 tests/run.sh
 rsync -a --delete --exclude .git -e 'ssh' ./ spark:sparkhome.next/
 
-# On the Spark
-cd ~/sparkhome.next && python3 -m sparkhome --selftest && rsync -a --delete ~/sparkhome/ ~/sparkhome.prev/ &&
-  rsync -a --delete ~/sparkhome.next/ ~/sparkhome/ && cd ~/sparkhome && deploy/install.sh enable
+# Then, on the Spark
+cd ~/sparkhome.next && python3 -m sparkhome --selftest &&
+  rsync -a --delete --exclude __pycache__ ~/sparkhome/ ~/sparkhome.prev/ &&
+  rsync -a --delete --exclude __pycache__ ~/sparkhome.next/ ~/sparkhome/ && cd ~/sparkhome && deploy/install.sh enable
 ```
 
-`enable` always (re)starts the daemon so the new code takes effect. `~/sparkhome` becomes a mirror of the Mac checkout
+`--exclude __pycache__` leaves Python's caches alone. A cache that a `sudo python3` run wrote (as in
+[tools/siri_probe.py](../tools/siri_probe.py)'s examples) is root's, so `--delete` can't remove it and would stop the
+swap halfway.
+
+`enable` always (re)starts the daemon so the new code takes effect. `~/sparkhome` becomes a mirror of the repo
 (`--delete`), so keep nothing there that isn't in the repo: FLIRC backups, for example, live in the Mac repo
 ([deploy/flirc-apple-remote.md](../deploy/flirc-apple-remote.md)). Your own config is outside it (see
 [Configuration](#configuration)).
@@ -87,7 +94,8 @@ saved GNOME settings, and removes the overrides it created.
 **To go back to the previous version,** disable this one first, then swap the previous tree in and enable it:
 
 ```bash
-cd ~/sparkhome && deploy/install.sh disable && rsync -a --delete ~/sparkhome.prev/ ~/sparkhome/ && deploy/install.sh enable
+cd ~/sparkhome && deploy/install.sh disable && rsync -a --delete --exclude __pycache__ ~/sparkhome.prev/ ~/sparkhome/ &&
+  deploy/install.sh enable
 ```
 
 Disable first: it closes the kiosk. A SparkHome stopped while a game was loading leaves the kiosk pinned above every
