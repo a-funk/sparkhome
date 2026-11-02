@@ -254,7 +254,7 @@ def _selftest_live():
     """The shipped plugins through the real Shell (--demo), Agent and Connectors: a tile type, a connector's tools for
     the model, its guard, its call and toast."""
     import json
-    import os
+    import shutil
     import tempfile
     from . import connectors as conn_mod, shell as shell_mod
     from .agent import REFUSED, Agent
@@ -275,9 +275,9 @@ def _selftest_live():
         assert sh._classes.get("net.supertuxkart.supertuxkart") == "kart"   # its window is found as an exec tile's
         a = sh.agent = Agent(sh, sh.settings, sh.emit)
         c = a.connectors
-        for _ in range(200):                     # tools are listed in the background (kick)
-            if c.all["wol"].tools:
-                break
+        for _ in range(500):                     # tools are listed, then cached, in the background (kick): wait for
+            if c.all["wol"].tools and not c.all["wol"]._busy:   # its end, not just the tools, or its save can land
+                break                                           # in the cache folder while it is being removed
             time.sleep(0.01)
         names = [t["function"]["name"] for t in c.llm_tools("wake the gaming pc")]
         assert names == ["wol__list_devices", "wol__wake_device"] and c.llm_tools("play netflix") == [], names
@@ -299,9 +299,7 @@ def _selftest_live():
         sh.agent = None
         assert not home.ask("go home")["ok"]
     finally:
-        for f in os.listdir(conn_mod.CACHE):
-            os.unlink(os.path.join(conn_mod.CACHE, f))
-        os.rmdir(conn_mod.CACHE)
+        shutil.rmtree(conn_mod.CACHE, ignore_errors=True)
         conn_mod.CACHE = cache0
 
 
