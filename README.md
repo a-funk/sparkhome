@@ -16,7 +16,7 @@ generating tokens while you watch YouTube.
   Phone ───────┤              ├──▶  SparkHome  ────┼─ home-lab services, GPU/memory widgets
   Your plugin ─┘              │     daemon         └─ Settings: display, sound, voice, sleep, controllers
   Voice ──▶ whisper ──▶ words ┤                    
-  Claude Code, any MCP agent ─┘──▶ 24 tools  ──▶  connectors: robot vacuum, Wake-on-LAN, your plugin
+  Claude Code, any MCP agent ─┘──▶ 25 tools  ──▶  connectors: robot vacuum, Wake-on-LAN, your plugin
 ```
 
 ## What it does
@@ -39,7 +39,7 @@ generating tokens while you watch YouTube.
   - Keyboards and mice.
   - A phone remote (PIN-paired) with a trackpad and dictation.
   - Anything else, through a [controller plugin](docs/EXTENDING.md#controllers).
-- **An agent interface.** `/mcp` exposes 24 semantic tools (`get_screen`, `open_app`, `search`, `click`,
+- **An agent interface.** `/mcp` exposes 25 semantic tools (`get_screen`, `open_app`, `search`, `click`,
   `screenshot`…), so Claude Code or any MCP client can watch and drive the TV. SparkHome is also an MCP *client*: home
   devices with an MCP server join the voice assistant.
 - **Safety rules for a shared room.**

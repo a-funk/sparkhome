@@ -1,6 +1,8 @@
 # Extending SparkHome
 
 SparkHome is built from four kinds of parts. Most new things need only config; the rest are one Python file each.
+You can also ask the TV: "add a tile for PBS" has a bigger local model build and test it there, and keep it when you
+press Keep ([the builder](MANUAL.md#the-builder)).
 
 | You want to add | It is a | Config only | Plugin |
 |---|---|---|---|
@@ -10,7 +12,7 @@ SparkHome is built from four kinds of parts. Most new things need only config; t
 | A microphone, speech recognizer, voice or language model | **voice backend** | `mic`, `asr`, `tts`, `llm`, `llm_big` | `home.ask(text)`, for a recognizer of your own |
 
 The fifth part, the **agent interface**, is already there: any MCP client (Claude Code, an agent framework) drives the
-TV through 24 tools at `/mcp`. See [Agents](#agents-drive-the-tv-over-mcp).
+TV through 25 tools at `/mcp`. See [Agents](#agents-drive-the-tv-over-mcp).
 
 Everything below runs in `--demo` on a laptop, so you can build a plugin before you have the hardware.
 
@@ -161,7 +163,9 @@ the repo's [sparkhome.json](../sparkhome.json).
 
 - **`web`**: a page in the kiosk's Chrome, in its own tab. `search` takes a URL with `{q}` for voice search. `nav`
   sets how the gamepad drives the page: `"pointer"` (the default), `"keys"` (TV-style web apps) or `"pad"` (pages that
-  read the controller themselves). `skin: true` makes a desktop site navigable with a remote.
+  read the controller themselves). `skin: true` makes a desktop site navigable with a remote, and `zoom` draws it
+  bigger. `open_in` plays the site's video pages in another tile, such as YouTube's TV player
+  ([the manual](MANUAL.md#configuration) has the fields).
 - **`exec`**: a native app. `window_class` ties its windows to the tile, so the app switcher can show and close it.
   `"game": false` stops the bigger model from treating it as a game.
 - **`steam`**: a Steam game by `appid`, or a `steam://` `uri`. Installed games also appear on their own in the Games
@@ -256,7 +260,7 @@ person in the room said.
 
 ## Agents: drive the TV over MCP
 
-Any MCP client drives the TV through the same 24 tools the voice assistant uses: `get_screen`, `open_app`, `navigate`,
+Any MCP client drives the TV through the same 25 tools the voice assistant uses: `get_screen`, `open_app`, `navigate`,
 `select`, `search`, `media`, `click`, `screenshot`, `close_app` and more. `/mcp` answers on loopback only; from
 another machine, use an ssh tunnel:
 

@@ -232,6 +232,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, app.shell.prefs.section(path[14:], app, local))
         if path == "/api/display/modes":
             return self._json(200, app.shell.prefs.modes())
+        if path == "/api/build":                 # the builder (builder.py): what it is doing, or idle
+            b = getattr(app.agent, "builder", None)
+            return self._json(200, {"ok": True, **b.status()}) if b else \
+                self._json(404, {"ok": False, "error": "no builder (settings.builder)"})
         if path == "/api/sleep":
             st = _sleep(app.shell, "sleep_state", full=True)
             return self._json(200, {**st, "ok": True}) if st is not None else \
@@ -294,6 +298,13 @@ class Handler(BaseHTTPRequestHandler):
             if not (isinstance(key, str) and 0 < len(key) <= 200 and isinstance(force, bool)):
                 return bad("expected {key: an open app's key, force?: true|false}")
             return self._json(200, app.shell.close_app(key, force, person=True))
+        if path in ("/api/build/keep", "/api/build/discard", "/api/build/stop"):   # the Keep sheet: a person at
+            if not self.headers.get("Origin"):   # the TV (our own pages; gate() refused other Origins), never an agent
+                return self._json(403, {"ok": False, "error": "the TV's own Keep sheet only (agents: the build tool)"})
+            b = getattr(app.agent, "builder", None)
+            if not b:
+                return self._json(404, {"ok": False, "error": "no builder (settings.builder)"})
+            return self._json(200, b.stop() if path.endswith("stop") else b.answer(path.endswith("keep")))
         if path == "/api/tilt":                  # a remote's resting finger leans the focused tile (Siri Remote, tvOS-style)
             x, y = data.get("x"), data.get("y")
             if not all(type(v) in (int, float) and -1 <= v <= 1 for v in (x, y)):
@@ -486,6 +497,9 @@ def main(args):
     port, lan = shell.port, bool(args.lan or settings.get("lan"))
     shell.launch_chrome = not args.no_browser
     agent = prefs.agent = shell.agent = load_agent(shell, emit)   # (shell.agent: plugins' Home.ask and Home.say)
+    if agent and isinstance(shell.settings.get("builder"), dict):   # a bigger model builds integrations (builder.py)
+        from .builder import Builder
+        agent.builder = Builder(shell, agent, emit, shell.settings)
     shell.on_voice = getattr(agent, "voice_key", None)
     host = socket.gethostname().lower()
     lan_url = f"http://{host if '.' in host else host + '.local'}:{port}/remote" if lan else None
@@ -497,6 +511,8 @@ def main(args):
         sys.exit(f"sparkhome: can't listen on port {port}: {e}")
     shell.start()
     prefs.start()                                # the brightness once X answers, then the display guard
+    if getattr(agent, "builder", None):         # a build that restarted SparkHome to load its plugin goes on, once the
+        threading.Timer(8, agent.builder.resume).start()   # kiosk is back (it drives the TV)
     if agent and not args.demo:
         agent.start_mic()                        # the Siri Remote's own mic: a standing connection to its tap
     threading.Thread(target=_ticker, args=(app,), name="stats", daemon=True).start()
@@ -688,6 +704,9 @@ def _selftest():
     assert req("POST", "/api/close", {"key": "netflix"}, me) == (200, {"ok": True, "state": "closed", "title": "Netflix"})
     assert req("POST", "/api/close", {"key": "steam:1174180", "force": False}, me)[1]["state"] == "closing"
     assert req("POST", "/api/close", {"key": "nope"}, me) == (200, {"ok": False, "error": "Nope isn't open"})
+    # the builder's Keep sheet: the person's press only; with no builder set up, there's nothing to answer
+    assert req("POST", "/api/build/keep", {})[0] == 403 and req("POST", "/api/build/keep", {}, me)[0] == 404
+    assert req("GET", "/api/build")[0] == 404
     # Settings: any caller reads; an agent (no Origin) sets AGENTS' keys only (403), the mode never here (400), and the
     # display mode, power and Sleep Now take the person's own pages (403 without our Origin); unknown names are 404
     s, v = req("GET", "/api/settings")

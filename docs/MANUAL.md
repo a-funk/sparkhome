@@ -153,6 +153,9 @@ Autologin has never actually run on this Spark, so plan one reboot to confirm th
   - `llm_big`: the bigger model that knowledge questions, recommendations and dependent chains escalate to (`api`
     `"openai"`, `base_url`, `model`, `timeout_s` 15, `while_gaming` false, `escalate_tool` false). Leave it out to keep
     everything on `llm`. See [Routing and escalation](#routing-and-escalation).
+  - `builder`: the model that builds integrations when asked ("add a tile for PBS"): an OpenAI-compatible server with
+    tool calls, vision preferred (`base_url`, `model`, `api_key` or `key_file`, `timeout_s` 300 per answer, `steps`
+    60 tool calls, `minutes` 20, `max_tokens` 8192). Leave it out and there is no builder. See [The builder](#the-builder).
   - `request_log` (true): keep a private log of handled requests on the Spark, for training a better router later.
   - `mcp_servers`: home devices that SparkHome drives over MCP, such as Robbie the vacuum; see
     [Connectors](#connectors-home-devices-over-mcp).
@@ -174,6 +177,17 @@ Autologin has never actually run on this Spark, so plan one reboot to confirm th
   - `tiles` (any web tile) is a CSS selector for the cards that page makes clickable by script alone, so the skin can
     land on them and `get_screen`, `click` and the page tools can see them (`"yt-lockup-view-model"` for YouTube's TV
     interface). A selector Chrome can't parse counts as none.
+  - A web tile's `zoom` (0.5 to 4) draws a desktop site bigger and still fills the screen: at `2.5` a 4K TV lays the
+    page out as if it were 1536 px wide and draws it sharp. It is CSS `zoom` on the page's root element, so it follows
+    display mode changes. A page reads `innerWidth` and media queries at the full width, which suits desktop sites.
+    (Chrome's device emulation is not used: desktop Chrome draws an emulated viewport at its CSS size, in a corner of
+    the TV, while CDP screenshots of it look right. [M])
+  - A web tile's `open_in` plays what it links to in another tile:
+    `{"match": "^https://hackertube\\.org/watch/([\\w-]{11})", "tile": "youtube", "url": "https://www.youtube.com/tv#/watch?v=\\1", "while": "#/watch"}`
+    plays a video picked on that site in YouTube's TV player, and the site stays where it was. Once the other tile's
+    URL has matched `while` for 3 s and then doesn't (Back leaves the video, or it ends), the site is back in front.
+    Opening the other tile any other way ends the hand-off. `match` needs a group for `url`. Anchor it and keep the
+    group narrow: the page reports the link, and only what `match` lets through reaches the other tile.
   - An exec tile's `window_class` (its windows' `WM_CLASS`, or a list of them, each a shell pattern if need be) ties its
     windows to it even after a restart or when the app was started elsewhere, so the [app switcher](#app-switcher)
     shows it as that app, which agents can't quit. `Minecraft*` is the game Prism starts: GLFW names its window after
@@ -990,6 +1004,51 @@ variable instead, `SHARK_AUTH0_REFRESH_TOKEN` works on the server's first start,
 (sharkclean-mcp README, "Self-hosting over HTTP"). The install steps for the server itself (copy the checkout without
 its `.env`, `uv sync`, create the bearer file) are in the unit file's header.
 
+### The builder
+
+Ask for something the TV doesn't have yet, and a bigger local model builds it on the TV while you watch: "add a tile
+for PBS", "put Nebula on the home screen", "add a tile for Hulu and help me sign in", "build a plugin that shows the
+weather". The fast path hands those words, whole, to `build`; the small model can call it too, when the words say tile,
+integration, plugin, connect, build, set up or sign in. "Stop the build" ends one. It needs `settings.builder` and the
+owner's own config (`~/.config/sparkhome/sparkhome.json`).
+
+- **How it works** ([sparkhome/builder.py](../sparkhome/builder.py)). The model reads the tiles and rows, reads the
+  service's site (`fetch`: its title, text, links and forms, which show a search URL), and drafts tiles. A web tile is
+  on the TV at once, in its row. The model opens it, looks (`get_screen`, and `screenshot` when it can see images) and
+  fixes it (`zoom`, `skin`, `nav`, the URL) until it reads from the couch and works with the remote. Toasts say what it
+  is doing; it speaks only to ask you something.
+- **Signing in is yours.** The builder opens the sign-in page and asks you, aloud, to sign in with the phone remote's
+  keyboard ([Signing into streaming services](#signing-into-streaming-services)). Then it waits and looks again. It
+  never asks for, says or types a password, email or code.
+- **Plugins** ([EXTENDING.md](EXTENDING.md)), when config can't do it: the model writes the file, which is
+  compiled to check it, never run. App tiles (`exec`) and a plugin's own tile types wait too. Only web tiles are
+  live before Keep.
+- **What it may touch.** It drives the TV as an agent does over MCP, with the voice assistant's look-and-press tools
+  (`get_screen`, `navigate`, `select`, `back`, `home`, `click`, `type_text`). It opens only web tiles and what this
+  build kept. Pages can steer it (page text is the model's input), so games, apps, connectors, the app switcher and
+  Settings are not its to touch. Its screenshots are screencast frames scaled by Chrome. A clipped
+  `Page.captureScreenshot` re-lays the page out while it captures, and the TV shows that as a flash. [M]
+- **Where drafts can point.** A draft's URL, search and `open_in` URL, and every page `fetch` reads, redirects
+  included, must be public internet addresses with a fixed host. This Spark, the LAN and the tailnet are refused,
+  because SparkHome's own pages treat a page on this machine as the person. A draft has only the keys a tile of
+  its type needs.
+- **Nothing is kept until you press Keep.** The model asks with a summary. Settings opens with a sheet that lists,
+  first, each plugin (Python that runs inside SparkHome with all of its access) and each command, then each page, then
+  the model's summary (200 characters at most). Discard is focused. Back, Home or leaving Settings discards. Only a
+  press on the TV's own page keeps: `POST /api/build/keep` without SparkHome's `Origin` (an agent) is refused. That is
+  policy against agents, as for the switcher ([Security model](#security-model)); the builder model itself can't reach
+  this machine, so it can't load the page that sends it. No answer in 3 minutes discards.
+- **What Keep writes:** `~/.config/sparkhome/built.json` (its tiles, the rows they join, its plugins, and a line per
+  build), with the previous one beside it as `built.json.bak`, and each plugin as `~/.config/sparkhome/plugins/NAME.py`.
+  SparkHome reads `built.json` after your config: its tiles never replace yours, a tile it can't use is left out (a
+  warning in the log), and a new row comes before the last one. Your config file is never rewritten.
+- **A kept plugin** needs SparkHome to restart to load it, so the build saves itself
+  (`~/.local/state/sparkhome/build-resume.json`), restarts SparkHome, and goes on 8 s after it is back, to test the
+  plugin. A saved build older than 15 minutes is dropped.
+- **Undo:** delete its entries from `built.json` (or the whole file) and its plugin files, then restart SparkHome.
+- **Limits:** one build at a time; `steps` tool calls and `minutes` in all; the last two screenshots go along with
+  each request (each costs thousands of tokens). It adds tiles; it doesn't change yours.
+
 ## Remotes and controllers
 
 - **Works today:**
@@ -1167,6 +1226,10 @@ it. There are four ways to enter credentials:
 ## Security model
 
 - **The daemon** listens on `127.0.0.1:8780` only.
+- **The builder** writes tiles and plugin code that a model chose, from page text it read: anyone who can talk to the
+  TV, and any page the model reads, can steer it. So a draft only opens public web pages (never this Spark, the LAN
+  or the tailnet), plugin code is compiled but never run, and nothing is kept or run until a person presses Keep on
+  the TV, on a sheet that lists what each part runs. Keep a plugin only if you meant to ask for one.
 - **LAN mode.** With `--lan` it binds `0.0.0.0`.
   - Every non-loopback request, except `GET /remote` and `POST /api/pair`, then needs a bearer token or the `sh_token`
     cookie.
@@ -1185,8 +1248,9 @@ it. There are four ways to enter credentials:
   process, or anything with an ssh tunnel to 8780, can act as the person at the TV. `POST /api/voice` runs its text as
   your own words, and `POST /api/pointer` (the phone's trackpad, no `Origin` needed) moves and clicks the real pointer:
   in an open switcher it clicks a card's × or the **Force Quit** button. With SparkHome's `Origin`, which any process
-  can send, `POST /api/close` quits or force quits a card as the switcher does, and `/api/action`'s `navigate` and
-  `select` work an open switcher. Through these, it can quit or force quit a game, as `kill` could.
+  can send, `POST /api/close` quits or force quits a card as the switcher does, `/api/action`'s `navigate` and
+  `select` work an open switcher, and `POST /api/build/keep` keeps a build. Through these, it can quit or force quit a
+  game, as `kill` could.
 - **The resolution, power and Sleep Now are the person's, by policy.** Agents (MCP, or `/api/action` and
   `/api/settings/<key>` without SparkHome's own `Origin`) can read every setting and change the brightness, the
   volume and the sleep timer; they can't change the resolution, restart or shut down, put the TV to sleep, or
@@ -1544,7 +1608,7 @@ Planned next (added 2026-10-09):
 
 | Path | What |
 |---|---|
-| `sparkhome/` | The daemon: `server.py` (HTTP, SSE, auth), `shell.py` (Chrome, Steam, X11, tiles), `inputs.py` (gamepad), `siri.py` (Siri Remote), `siri_audio.py` (its microphone's frames to a WAV), `hcitap.py` (the helper that reads them below BlueZ), `agent.py` (tools, voice, LLM, MCP), `router.py` (local or big model, request log), `connectors.py` (MCP client: Robbie), `settings.py` (Settings: the owner's choices, the TV's modes, power), `cdp.py` |
+| `sparkhome/` | The daemon: `server.py` (HTTP, SSE, auth), `shell.py` (Chrome, Steam, X11, tiles), `inputs.py` (gamepad), `siri.py` (Siri Remote), `siri_audio.py` (its microphone's frames to a WAV), `hcitap.py` (the helper that reads them below BlueZ), `agent.py` (tools, voice, LLM, MCP), `builder.py` (builds integrations on the TV), `router.py` (local or big model, request log), `connectors.py` (MCP client: Robbie), `settings.py` (Settings: the owner's choices, the TV's modes, power), `cdp.py` |
 | `ui/` | The launcher (`index.html`, `style.css`, `app.js`) and the phone remote (`remote.html`) |
 | `sparkhome.json` | Default config: settings, rows, tiles, user agents |
 | `deploy/` | `install.sh` (enable/disable/status/root), `pair.sh`, `remotes.hwdb`, `71-sparkhome-siri.rules`, `flirc-apple-remote.md`, `sparkhome-shark.service` (the vacuum's MCP server), `sparkhome-siri-mic.service` (the Siri Remote's microphone helper) |

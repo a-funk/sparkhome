@@ -42,6 +42,7 @@ from .cdp import CDP
 log = logging.getLogger("sparkhome")
 REPO = Path(__file__).resolve().parent.parent
 USER_CONFIG = Path("~/.config/sparkhome/sparkhome.json").expanduser()
+BUILT = USER_CONFIG.parent / "built.json"        # what builds kept (builder.py): tiles, rows and plugins, never the owner's
 TOOL_PREFIXES = ("Proton", "Steam Linux Runtime", "Steamworks")
 # Source GameSpark's env.sh with GAMESPARK_STEAM (settings.steam_setup) cleared while a Steam runs: env.sh then detects
 # that Steam's setup, so steam_launch writes to its pipe and reads its log. The setting only picks a cold start's Steam.
@@ -122,13 +123,71 @@ def load_config(path=None, user=USER_CONFIG):
             and isinstance(cfg.get("tiles"), dict)):
         raise ValueError(f"{p}: needs settings, rows and tiles")
     for k, t in cfg["tiles"].items():
-        if isinstance(t, dict) and t.get("nav") not in (None, *NAV):
-            raise ValueError(f"{p}: tile {k!r} has nav {t['nav']!r}; use one of {', '.join(NAV)} (or leave it out)")
-        if isinstance(t, dict) and not isinstance(t.get("skin", False), (bool, dict)):
-            raise ValueError(f'{p}: tile {k!r} has skin {t["skin"]!r}; use true, false or {{"hide": [selectors]}}')
-        if isinstance(t, dict) and not isinstance(t.get("tiles", ""), str):
-            raise ValueError(f"{p}: tile {k!r} has tiles {t['tiles']!r}; use a CSS selector string")
+        check_tile(k, t, cfg["tiles"], p)
+    if p == user:                                # builds join the owner's own config only (never --config's)
+        cfg["_built"] = str(user.parent / BUILT.name)
     return cfg
+
+
+def check_tile(k, t, tiles, where="config"):
+    """A tile's keys that SparkHome can't use raise ValueError (load_config; a build's tiles: builder.py)."""
+    if not isinstance(t, dict):
+        return
+    if t.get("nav") not in (None, *NAV):
+        raise ValueError(f"{where}: tile {k!r} has nav {t['nav']!r}; use one of {', '.join(NAV)} (or leave it out)")
+    if not isinstance(t.get("skin", False), (bool, dict)):
+        raise ValueError(f'{where}: tile {k!r} has skin {t["skin"]!r}; use true, false or {{"hide": [selectors]}}')
+    if not isinstance(t.get("tiles", ""), str):
+        raise ValueError(f"{where}: tile {k!r} has tiles {t['tiles']!r}; use a CSS selector string")
+    z = t.get("zoom", 1)
+    if isinstance(z, bool) or not isinstance(z, (int, float)) or not 0.5 <= z <= 4:
+        raise ValueError(f"{where}: tile {k!r} has zoom {z!r}; use a number from 0.5 to 4")
+    o = t.get("open_in")
+    if o is not None:
+        try:
+            ok = all(isinstance(o.get(x), str) for x in ("match", "tile", "url", "while"))
+            ok = ok and bool(re.compile(o["match"]).groups) and bool(re.compile(o["while"]).pattern)
+        except (AttributeError, re.error):
+            ok = False
+        if not ok or o["tile"] == k or o["tile"] not in tiles:
+            raise ValueError(f'{where}: tile {k!r} has open_in {o!r}; use {{"match": "<regex with a group>", '
+                             f'"tile": "<another tile>", "url": "<template using \\\\1>", "while": "<regex>"}}')
+
+
+def merge_built(tiles, rows, built):
+    """(tiles, rows) of the config + a build's (built.json, or a build's drafts): its tiles join but never replace one
+    of the config's, and a tile SparkHome can't use is left out; each of its rows adds its tiles to the config's row of
+    that id, or is a new row before the last one (System). -> (tiles, rows), new objects."""
+    tiles, rows = dict(tiles), [dict(r) for r in rows]
+    add = (built or {}).get("tiles") or {}
+    for k, t in add.items() if isinstance(add, dict) else ():
+        try:
+            if k not in tiles:
+                check_tile(k, t, {**tiles, **add}, "built.json")
+                tiles[k] = t
+        except ValueError as e:
+            warn_once(f"built:{k}", "%s; left out", e)
+    for br in (built or {}).get("rows") or []:
+        if not (isinstance(br, dict) and isinstance(br.get("id"), str) and isinstance(br.get("tiles"), list)):
+            continue
+        r = next((r for r in rows if r.get("id") == br["id"]), None)
+        if r is None:
+            rows.insert(max(0, len(rows) - 1), {"style": "icons", **br, "tiles": list(br["tiles"])})
+        else:
+            r["tiles"] = list(dict.fromkeys([*r.get("tiles", []), *br["tiles"]]))
+    return tiles, rows
+
+
+def read_built(path):
+    """built.json as a dict ({} when there is none or it doesn't parse: a build's file never stops the TV)."""
+    try:
+        b = json.loads(Path(path).read_text())
+        return b if isinstance(b, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        warn_once("built", "%s: %s; ignored", path, e)
+        return {}
 
 
 def expand(v):
@@ -484,6 +543,20 @@ BRIDGE_JS = r"""(() => {
     if (a) { e.preventDefault(); e.stopImmediatePropagation(); send(a); }
   }, true);
   if (window.top !== window) return;
+  const zoom = __ZOOM__;                         // the tile's zoom: the page laid out z times narrower and drawn z times
+  if (zoom !== 1) {                              // larger, filling the TV (CSS zoom on <html>, a document sheet that a
+    const z = new CSSStyleSheet();               // page's own style attribute can't undo). Not Chrome's emulated
+    z.replaceSync(`html{zoom:${zoom}!important}`);   // viewports: measured, desktop Chrome draws those at their CSS
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, z];   // size, in a corner of the screen
+  }
+  let openIn = null;                             // the tile's open_in "match": a picked link that matches plays in
+  try { openIn = __OPEN_IN__ && new RegExp(__OPEN_IN__); } catch (e) {}   // another tile (_open_in), and this page
+  if (openIn) addEventListener('click', e => {   // stays where it was: no navigation for its router to finish late
+    const a = e.target.closest && e.target.closest('a[href]');
+    if (!a || !openIn.test(a.href)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    try { window.sparkhome(JSON.stringify({action: 'open_in', url: a.href})); } catch (err) {}
+  }, true);
   const NAV = __NAV__, KEYS = NAV === 'keys', DIRS = ['up', 'down', 'left', 'right'];
   const ACT = {0: 'select', 1: 'back', 8: 'back', 9: 'media', 12: 'up', 13: 'down', 14: 'left', 15: 'right', 16: 'home',
                17: 'up', 18: 'down', 19: 'left', 20: 'right'};
@@ -1202,26 +1275,21 @@ def _action(fn):
 
 
 class Shell:
+    _played_s = 3.0                              # _played: how long a "while" URL must hold to count as playing
+
     def __init__(self, config, demo, emit):
         self.config, self.demo, self.emit = config, demo, emit
         self.settings = expand(config["settings"])
-        self.tile_defs = {}
+        # built.json (builder.py): what builds kept joins the config, the config's own tiles and plugins first
+        self.built_path = config.get("_built")
+        built = read_built(self.built_path) if self.built_path else {}
+        own = self.settings.get("plugins") or {}
+        own = dict.fromkeys(own, True) if isinstance(own, list) else own if isinstance(own, dict) else {}
+        if isinstance(built.get("plugins"), dict) and built["plugins"]:
+            self.settings["plugins"] = {**built["plugins"], **own}
+        self._owner, self._draft = {"tiles": config["tiles"], "rows": config["rows"]}, {}   # (overlay)
         self.plugins = plugins.load(self)        # settings.plugins: controllers, tile types, connectors (plugins.py)
-        made = plugins.tile_types(self.plugins)
-        for tid, t in config["tiles"].items():
-            t = t if isinstance(t, dict) else {}
-            if t.get("type") in made:            # a plugin's tile type: made into a built-in tile (web, exec, steam)
-                try:
-                    t = {**t, **made[t["type"]](dict(t))}
-                except Exception as e:
-                    warn_once(f"tile:{tid}", "tile %r: its %s plugin failed (%r); skipped", tid, t.get("type"), e)
-                    continue
-            kind = t.get("type")
-            need = {"web": "url", "exec": "argv", "widget": "widget", "steam": "appid" if "appid" in t else "uri"}.get(kind)
-            if not (need and t.get(need) and t.get("title")):
-                warn_once(f"tile:{tid}", "tile %r is incomplete; skipped", tid)
-                continue
-            self.tile_defs[tid] = {**t, "id": tid, **({"argv": [str(a) for a in expand(t["argv"])]} if kind == "exec" else {})}
+        self._set_tiles(*merge_built(config["tiles"], config["rows"], built))
         self.on_voice = None
         self.on_dim = None                       # server: the warning's dim on or off (Prefs.brightness, dim=on)
         self.launch_chrome = True                # server sets False for --no-browser
@@ -1243,6 +1311,7 @@ class Shell:
         self.running = set()                     # tile ids of running games/apps
         self.log_running = set()                 # appids Steam's log says are running
         self.tabs = OrderedDict()                # web tile id → {"target", "session"}, least recently used first
+        self._casts = {}                         # session → [Event, frame]: screenshot(small) waiting on its frame
         self.launcher = {"target": None, "session": None}
         self.active_tab = None                   # web tile in front (None: the launcher tab)
         self._launcher_due = False               # the kiosk's page closed behind a game: the launcher's when it's back
@@ -1253,14 +1322,6 @@ class Shell:
         self._wins, self._seen, self._prev_running, self._keys_down = {}, set(), set(), set()
         self._log_removed, self._steam_guard, self._home_guard, self._started = False, 0.0, 0.0, False
         self._ptr_lock = threading.Lock()        # the trackpad: one X connection at a time, input kept in order
-        self._bpm = next((k for k, t in self.tile_defs.items() if "bigpicture" in str(t.get("uri", ""))), None)
-        # The Games row (auto: steam) lists games: "quit the game" means one (Big Picture aside). Its web tiles are
-        # cloud games: closing one ends a game session, a game's person rule
-        self._games_row = {i for r in config["rows"] if r.get("auto") == "steam" for i in r.get("tiles", [])}
-        self._game_tabs = {i for i in self._games_row if self.tile_defs.get(i, {}).get("type") == "web"}
-        wc = lambda t: [t["window_class"]] if isinstance(t.get("window_class"), str) else t.get("window_class") or []
-        self._classes = {c.lower(): k for k, t in self.tile_defs.items() for c in wc(t)}   # a WM_CLASS (or a shell
-        # pattern: GLFW names a window after its first title when the app sets no class, "Minecraft* 1.21.1"), or a list
         self._art, self._stats, self._stats_lock, self._last_state = {}, (0.0, None), threading.Lock(), None
         self._demo = {"util": 35.0, "temp": 52.0, "power": 48.0, "mem": 41.0, "load": 1.2, "vol": 50}
         self._demo_runs = {}                     # demo: tile id → its latest simulated launch (_demo_launch)
@@ -1278,6 +1339,50 @@ class Shell:
         # line came. _splash: (the game launch whose loading screen was asked for last, its pending entry), the one
         # handed over (_hold). _refocused: the windows that gave the pinned kiosk the focus back, once a pin (_tick)
         self._noconfig, self._lines, self._splash, self._refocused = {}, {}, None, set()
+        self._refresh()
+
+    def _set_tiles(self, tiles, rows):
+        """tile_defs and what follows from them, from (tiles, rows): at start, and when a build's tiles come or go."""
+        defs, made = {}, plugins.tile_types(self.plugins)
+        for tid, t in tiles.items():
+            t = t if isinstance(t, dict) else {}
+            if t.get("type") in made:            # a plugin's tile type: made into a built-in tile (web, exec, steam)
+                try:
+                    t = {**t, **made[t["type"]](dict(t))}
+                except Exception as e:
+                    warn_once(f"tile:{tid}", "tile %r: its %s plugin failed (%r); skipped", tid, t.get("type"), e)
+                    continue
+            kind = t.get("type")
+            need = {"web": "url", "exec": "argv", "widget": "widget", "steam": "appid" if "appid" in t else "uri"}.get(kind)
+            if not (need and t.get(need) and t.get("title")):
+                warn_once(f"tile:{tid}", "tile %r is incomplete; skipped", tid)
+                continue
+            defs[tid] = {**t, "id": tid, **({"argv": [str(a) for a in expand(t["argv"])]} if kind == "exec" else {})}
+        self.config = {**self.config, "tiles": tiles, "rows": rows}
+        self.tile_defs, self._gen = defs, getattr(self, "_gen", 0) + 1   # (_refresh: what it read is still current)
+        self._bpm = next((k for k, t in defs.items() if "bigpicture" in str(t.get("uri", ""))), None)
+        # The Games row (auto: steam) lists games: "quit the game" means one (Big Picture aside). Its web tiles are
+        # cloud games: closing one ends a game session, a game's person rule
+        self._games_row = {i for r in rows if r.get("auto") == "steam" for i in r.get("tiles", [])}
+        self._game_tabs = {i for i in self._games_row if defs.get(i, {}).get("type") == "web"}
+        wc = lambda t: [t["window_class"]] if isinstance(t.get("window_class"), str) else t.get("window_class") or []
+        self._classes = {c.lower(): k for k, t in defs.items() for c in wc(t)}   # a WM_CLASS (or a shell
+        # pattern: GLFW names a window after its first title when the app sets no class, "Minecraft* 1.21.1"), or a list
+
+    def overlay(self, draft=None):
+        """A build's drafts ({"tiles", "rows"}: builder.py) on the TV now, over the config and built.json, no restart;
+        None drops them. Also after a keep wrote built.json: the tiles as kept."""
+        self._draft = draft or {}
+        built = read_built(self.built_path) if self.built_path else {}
+        tiles, rows = merge_built(*merge_built(self._owner["tiles"], self._owner["rows"], built), self._draft)
+        with self.lock:
+            was = self.tile_defs
+            self._set_tiles(tiles, rows)         # a dropped or changed draft's tab goes with it (its page has the old
+            for tid in [k for k in self.tabs if self.tile_defs.get(k) != was.get(k)]:   # bridge: zoom, nav, skin)
+                tab = self.tabs.pop(tid)
+                if self.cdp:
+                    self._close(tab.get("target"), (tab.get("popup") or {}).get("target"))
+                self._tab_gone(tid)
         self._refresh()
 
     # ---- lifecycle
@@ -1319,6 +1424,7 @@ class Shell:
 
     def _refresh(self):
         """Rebuild the visible rows: Steam library scan, PATH/flatpak checks, local service ports."""
+        gen = self._gen                          # a build's tiles may change while this reads: then theirs stands
         games = self._scan_games()
         installed = {g["appid"] for g in games}
         ports = {local_port(t["url"]) for t in self.tile_defs.values() if t["type"] == "web"} - {None}
@@ -1332,6 +1438,8 @@ class Shell:
             if ts:
                 rows.append({"id": r["id"], "title": r.get("title"), "style": r.get("style", "icons"), "ids": [t["id"] for t in ts]})
         with self.lock:
+            if gen != self._gen:
+                return
             changed = (rows, visible) != (self._rows, self._tiles)
             self._rows, self._tiles, self.games = rows, visible, {g["appid"]: g for g in games}
         if changed and self._started:
@@ -2273,10 +2381,25 @@ class Shell:
             return {"ok": False, "error": f"no title {title!r} on this page (see list_titles)"}
         return {"ok": True, "opened": title}
 
-    def screenshot(self):
+    def screenshot(self, small=False):
         """PNG bytes of what's on the TV. Raises RuntimeError/OSError when it can't. Only what is in front is read under
         the action lock; the capture, which only reads, waits outside it (a busy page answers late: up to 15 s), so
-        Home never queues behind a screenshot."""
+        Home never queues behind a screenshot. small: a page as JPEG at most 1280 px wide, for a model's eyes
+        (builder.py); a game or app is a full PNG still."""
+        if small and not self.demo:              # one screencast frame, which Chrome scales: a clipped, scaled
+            with self.lock:                      # captureScreenshot re-lays the page out while it captures, and the TV
+                sess = None if self.surface == "app" else self._session()   # shows that (measured: a flash, small)
+            if sess:
+                w = self._casts[sess] = [threading.Event(), None]
+                try:
+                    self.cdp.call("Page.startScreencast", session=sess, format="jpeg", quality=70, maxWidth=1280,
+                                  maxHeight=1280)
+                    if not w[0].wait(5):
+                        raise RuntimeError("the page sent no frame")
+                    return base64.b64decode(w[1])
+                finally:
+                    self._casts.pop(sess, None)
+                    self.cdp.call("Page.stopScreencast", session=sess, timeout=5)
         with self.lock:
             if self.demo:
                 return png(320, 180, (30, 40, 70))
@@ -2641,6 +2764,8 @@ class Shell:
         nav, skin = t.get("nav") or "pointer", t.get("skin")
         cdp.call("Page.addScriptToEvaluateOnNewDocument", session=s, runImmediately=True,
                  source=BRIDGE_JS.replace("__NAV__", json.dumps(nav)).replace("__TILES__", json.dumps(t.get("tiles") or ""))
+                 .replace("__OPEN_IN__", json.dumps((t.get("open_in") or {}).get("match")))
+                 .replace("__ZOOM__", json.dumps(float(t.get("zoom", 1))))
                  + (SKIN_JS.replace(
                      "__SKIN__", json.dumps(skin if isinstance(skin, dict) else {}))
                     if (skin is True or isinstance(skin, dict)) and nav == "pointer" else ""))   # ({}: the plain skin)
@@ -2659,8 +2784,10 @@ class Shell:
             except (OSError, RuntimeError):  # gone already
                 pass
 
-    def _open_web(self, t, url=None):
+    def _open_web(self, t, url=None, back_to=None):
         tid = t["id"]
+        if tid in self.tabs:                     # before the page moves, so _played sees its first URLs; None: opened
+            self.tabs[tid]["back_to"] = back_to  # for itself, no way back (_open_in)
         if tid != self.active_tab:
             self._pause_front()
         if not self.demo:
@@ -2670,8 +2797,10 @@ class Shell:
                 del self.tabs[tid]
                 tab = None
             new = tab is None
-            if new:                              # a tab per tile: about:blank → attach + set up → navigate
-                tab = {"target": cdp.call("Target.createTarget", url="about:blank")["targetId"], "session": None}
+            if new:                              # a tab per tile: about:blank → attach + set up → navigate; tracked at
+                tab = self.tabs[tid] = {         # once, so _played sees its first URL
+                    "target": cdp.call("Target.createTarget", url="about:blank")["targetId"], "session": None,
+                    "back_to": back_to}
             try:
                 if new:
                     tab["session"] = self._attach(t, tab["target"])
@@ -2683,6 +2812,8 @@ class Shell:
                         log.warning("%s is slow to load", url)
                 self._show(tab)
             except (OSError, RuntimeError):      # never leave a blank half-made tab on the TV
+                if new:
+                    self.tabs.pop(tid, None)
                 for fn in ([lambda: cdp.call("Target.closeTarget", targetId=tab["target"])] if new else []) + \
                           [lambda: self._show(self.launcher)]:
                     try:
@@ -2693,6 +2824,7 @@ class Shell:
             self.tabs[tid] = tab
             self._kiosk_front()
         self.tabs[tid] = self.tabs.get(tid, {})
+        self.tabs[tid]["back_to"] = back_to      # (a new tab's dict is stored only now)
         self.tabs.move_to_end(tid)
         self._cap_tabs()
         self._set(surface="web", active=tid, active_tab=tid, title=t["title"])
@@ -2784,14 +2916,24 @@ class Shell:
         # Never wait for self.lock here: only this thread answers dialogs, and an action holding the lock may be waiting
         # on one (an Enter whose page calls alert(); measured: 20 s stalls). Work that needs the lock runs in _bg.
         meth, p = m.get("method"), m.get("params") or {}
+        if meth == "Page.screencastFrame":       # screenshot(small): the first frame is it (unacked: no more come)
+            w = self._casts.get(m.get("sessionId"))
+            if w and not w[0].is_set():
+                w[1] = p.get("data")
+                w[0].set()
+            return
         if meth == "Runtime.bindingCalled" and p.get("name") == "sparkhome":
             s = m.get("sessionId")
             if not s or self.surface != "web" or s != self._front().get("session"):
                 return      # only the page on screen speaks for the pad and remote: not a hidden tab, not the opener
                             # behind its popup, not a page left behind a game (select/arrows would key the game)
             try:
-                action = json.loads(p.get("payload") or "{}").get("action")
+                msg = json.loads(p.get("payload") or "{}")
+                action = msg.get("action")
             except (ValueError, AttributeError):
+                return
+            if action == "open_in" and self._sleep != "asleep":   # (_open_in checks the URL: any script can send it)
+                _bg(self._open_in, self.active_tab, str(msg.get("url", ""))[:2048])
                 return
             if action not in (*DIRS, "home", "back", "select", "media") or self._sleep == "asleep" or self.wake("page"):
                 return      # (a press that wakes the screen does nothing else.) Input, as a pad's stick there is,
@@ -2836,6 +2978,46 @@ class Shell:
             ti = p.get("targetInfo") or {}
             if ti.get("targetId") == self._front().get("target"):
                 _bg(lambda: self._set(title=ti.get("title", "")))   # out of order at worst: _tick reads it live
+            tid = next((k for k, tab in list(self.tabs.items()) if tab.get("target") == ti.get("targetId")), None)
+            if tid and (self.tabs.get(tid) or {}).get("back_to"):
+                _bg(self._played, tid, ti.get("url", ""), time.monotonic())   # (when: _bg threads may run out of order)
+
+    def _open_in(self, tid, url):
+        """A link picked on an "open_in" tile's page (its bridge caught the click, so the page stays where it was) plays in
+        the other tile, when it matches "match": HackerTube's videos in YouTube's TV player. _played brings tid back."""
+        with self.lock:
+            try:
+                o = (self._tiles.get(tid) or {}).get("open_in")
+                m = o and re.search(o["match"], url)
+                if m and self.surface == "web" and self.active_tab == tid:    # the page on screen: a person's pick
+                    self._open_web(self._tiles[o["tile"]], m.expand(o["url"]), back_to={"tile": tid, "since": None})
+            except (OSError, RuntimeError, KeyError) as e:
+                log.warning("open_in %s: %s", tid, e)
+
+    def _played(self, tid, url, at):
+        """A URL of tile tid, playing for another (_open_in). Once it has matched that tile's "while" for _played_s and
+        then doesn't (Back left the video, or it ended), the other tile is back in front. A shorter match is the
+        player's own loading: a YouTube just opened goes to its profile picker first, then back to the video.
+        ponytail: a Back within _played_s of the start stays in the player and keeps the way back for its next video."""
+        with self.lock:
+            tab = self.tabs.get(tid) or {}
+            ret = tab.get("back_to")
+            if not ret or at < tab.get("url_at", 0):   # (an older URL, arriving late: the newer one stands)
+                return
+            tab["url_at"] = now = at
+            o = (self._tiles.get(ret["tile"]) or {}).get("open_in") or {}
+            if re.search(o.get("while", "$^"), url):
+                ret["since"] = ret["since"] or now
+            elif ret["since"] is not None and now - ret["since"] < self._played_s:
+                ret["since"] = None
+            elif ret["since"] is not None:
+                tab["back_to"] = None
+                if self.surface == "web" and self.active_tab == tid and ret["tile"] in self.tabs and \
+                        ret["tile"] in self._tiles:
+                    try:
+                        self._open_web(self._tiles[ret["tile"]])
+                    except (OSError, RuntimeError) as e:
+                        log.warning("open_in back to %s: %s", ret["tile"], e)
 
     def _popup(self, tid, tab, pop):
         """Set a tile's new popup up like the tile, off the event thread (Page.enable waits while a dialog is up). Until
@@ -3583,6 +3765,17 @@ def _selftest_in(tmp):
         raise AssertionError("a skin that is neither true/false nor an object must fail the config check")
     except ValueError as e:
         assert "'yes'" in str(e), e
+    oi = {"match": "/watch/(\\w+)", "tile": "y", "url": "https://y.example/#/watch?v=\\1", "while": "#/watch"}
+    for bad in ({"zoom": 0}, {"zoom": "2"}, {"zoom": True}, {"open_in": {**oi, "match": "/watch/"}},
+                {"open_in": {**oi, "tile": "nope"}}, {"open_in": {**oi, "tile": "x"}}, {"open_in": {**oi, "while": "("}}):
+        user.write_text(json.dumps({**repo, "tiles": {"x": bad, "y": {}}}))
+        try:
+            load_config(None, user)
+            raise AssertionError(f"{bad} must fail the config check")
+        except ValueError:
+            pass
+    user.write_text(json.dumps({**repo, "tiles": {"x": {"zoom": 2.5, "open_in": oi}, "y": {}}}))
+    assert load_config(None, user)["tiles"]["x"]["zoom"] == 2.5
     assert expand({"a": ["~/x", "y"], "b": "~"})["a"][0] == os.path.expanduser("~/x")
     # every exec tile's windows are known by their WM_CLASS (after a restart, or started elsewhere): an app's card, which
     # agents can't quit, never a plain window's; a list names an app's several (Moonlight streams in SDL's own window)
@@ -5086,6 +5279,62 @@ def _selftest_in(tmp):
     assert cdp.log == [("Target.closeTarget", "P1"), ("Target.activateTarget", "T1"), ("Page.bringToFront", "ST1")]
     gone("P1")                                   # its targetDestroyed: nothing left to do
     assert not until(lambda: len(cdp.log) > 3, 0.2), cdp.log
+    # zoom: the bridge's CSS zoom on <html> (never an emulated viewport: desktop Chrome draws those in a corner)
+    cdp.log.clear()
+    sh._attach({"zoom": 2}, "T9")
+    assert "const zoom = 2.0;" in cdp.kw["source"] and not any(m.startswith("Emulation.") for m, _ in cdp.log)
+    sh._attach({}, "T9")
+    assert "const zoom = 1.0;" in cdp.kw["source"] and "__ZOOM__" not in cdp.kw["source"]
+    # screenshot(small): one screencast frame (Chrome scales it; a scaled capture flashes the TV), then the cast stops
+    start, cdp.call = cdp.call, lambda method, session=None, **kw: (start(method, session, **kw), method == (
+        "Page.startScreencast") and threading.Timer(0.05, sh._cdp_event, [{"method": "Page.screencastFrame",
+        "sessionId": session, "params": {"data": base64.b64encode(b"JPG").decode(), "sessionId": 1}}]).start())[0]
+    cdp.log.clear()
+    demo, sh.demo = sh.demo, False
+    assert sh.screenshot(small=True) == b"JPG" and not sh._casts, cdp.log
+    assert [m for m, _ in cdp.log] == ["Page.startScreencast", "Page.stopScreencast"], cdp.log
+    sh.demo, cdp.call = demo, start
+    # open_in: the bridge catches a pick of a matching link; the daemon checks it and plays it in the other tile. Once
+    # that tile's URL has held "while" for _played_s and then doesn't (Back left the video), the tile is in front again.
+    oi = {"match": "^https://ht\\.example/watch/([\\w-]{11})", "tile": "yt", "url": "https://yt.example/tv#/watch?v=\\1",
+          "while": "#/watch"}
+    sh._attach({"open_in": oi}, "T9")
+    assert "__OPEN_IN__" not in cdp.kw["source"] and json.dumps(oi["match"]) + " && new RegExp(" in cdp.kw["source"]
+    sh._attach({}, "T9")
+    assert "openIn = null && new RegExp(null)" in cdp.kw["source"]
+    opened, web0 = [], sh._open_web
+
+    def fake_open_web(t, url=None, back_to=None):
+        opened.append((t["id"], url))
+        sh.tabs.setdefault(t["id"], {"target": "T" + t["id"], "session": "S" + t["id"]})["back_to"] = back_to
+        sh.active_tab = t["id"]
+    sh._open_web, sh._played_s = fake_open_web, 0.3
+    sh._tiles["ht"] = {"id": "ht", "type": "web", "title": "HT", "url": "https://ht.example/", "open_in": oi}
+    sh._tiles["yt"] = {"id": "yt", "type": "web", "title": "YT", "url": "https://yt.example/tv"}
+    sh.tabs["ht"], sh.active_tab, sh.surface = {"target": "TH", "session": "SH"}, "ht", "web"
+
+    def pick(u, session="SH"):
+        sh._cdp_event({"method": "Runtime.bindingCalled", "sessionId": session,
+                       "params": {"name": "sparkhome", "payload": json.dumps({"action": "open_in", "url": u})}})
+
+    def url(target, u):
+        sh._cdp_event({"method": "Target.targetInfoChanged", "params": {"targetInfo": {"targetId": target, "url": u}}})
+    pick("https://evil.example/watch/abc_DEF-123"), pick("https://ht.example/watch/abc_DEF-123", session="Sx")
+    assert not until(lambda: opened, 0.2)        # not its match; not the page on screen
+    pick("https://ht.example/watch/abc_DEF-123")
+    assert until(lambda: opened == [("yt", "https://yt.example/tv#/watch?v=abc_DEF-123")]) and sh.active_tab == "yt"
+    url("Tyt", "https://yt.example/tv#/watch?v=abc_DEF-123")
+    url("Tyt", "https://yt.example/tv#/")                     # at once: its profile picker, not a leave
+    assert not until(lambda: len(opened) > 1, 0.4) and sh.tabs["yt"]["back_to"] == {"tile": "ht", "since": None}
+    url("Tyt", "https://yt.example/tv#/watch?v=abc_DEF-123")  # the video, after the picker
+    assert until(lambda: sh.tabs["yt"]["back_to"]["since"])
+    time.sleep(0.4)
+    url("Tyt", "https://yt.example/tv#/browse")               # Back left the video
+    assert until(lambda: opened[-1] == ("ht", None)) and not sh.tabs["yt"]["back_to"] and sh.active_tab == "ht"
+    sh._open_web, sh._played_s = web0, Shell._played_s
+    for k in ("ht", "yt"):
+        sh.tabs.pop(k, None), sh._tiles.pop(k)
+    sh.tabs["up"], sh.active_tab = {"target": "T1", "session": "ST1"}, "up"
     # the sleep warning's words go on the web app in front with its dim (no user activation), and off again with the
     # undim on that page, wherever the front is by then; none over the launcher (its own page says them) or a game
     cdp.log.clear()
